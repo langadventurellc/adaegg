@@ -2,8 +2,10 @@ import { readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { loadConfig } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
-import { dbPath, findRepoRoot } from "../engine/paths.ts";
+import { isPidAlive, readReady } from "../engine/lifecycle.ts";
+import { dbPath, findRepoRoot, stateDir } from "../engine/paths.ts";
 import { listNodeRuns, listRuns, listRunsForItem, type NodeRun, type Run } from "../engine/runs.ts";
 import {
   addWorkItem,
@@ -15,6 +17,7 @@ import {
   type Status,
   type WorkItem,
 } from "../engine/store.ts";
+import { runSupervisor } from "../supervisor/supervisor.ts";
 
 export type CliIo = {
   stdout: { write(text: string): unknown };
@@ -39,13 +42,24 @@ Commands:
   runs [--limit n]      List the newest runs (default 20).
   cancel <id>           Cancel a queued item.
   retry <id>            Queue a failed or cancelled item again.
-  status                Count items per status.
+  status                Count items per status and say whether the daemon is up.
+  start                 Run the daemon under a supervisor that restarts it after
+                        a change to the hatchling's own code.
 
 Ids may be abbreviated to a prefix of at least 4 characters.
 Options: -h, --help
 `;
 
 class UsageError extends Error {}
+
+// Ends the command with this exit code and no further message.
+class ExitCode extends Error {
+  code: number;
+  constructor(code: number) {
+    super(`exit ${code}`);
+    this.code = code;
+  }
+}
 
 const short = (id: string) => id.slice(0, 8);
 
@@ -242,14 +256,32 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       }
       return;
     }
+    case "start": {
+      const { values, positionals } = parse(args, {});
+      if (values.help) return void out(HELP);
+      if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals[0]}`);
+      const root = findRepoRoot(io.cwd);
+      const code = await runSupervisor({
+        root,
+        stateDir: stateDir(root, env),
+        config: loadConfig(root),
+        stdout: io.stdout,
+        stderr: io.stderr,
+      });
+      if (code !== 0) throw new ExitCode(code);
+      return;
+    }
     case "status": {
       const { values, positionals } = parse(args, {});
       if (values.help) return void out(HELP);
       if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals[0]}`);
-      const db = openDb(dbPath(findRepoRoot(io.cwd), env));
+      const root = findRepoRoot(io.cwd);
+      const db = openDb(dbPath(root, env));
       try {
         const items = listWorkItems(db);
         out(STATUSES.map((s) => `${s}  ${items.filter((i) => i.status === s).length}\n`).join(""));
+        const ready = readReady(stateDir(root, env));
+        out(ready !== null && isPidAlive(ready.pid) ? `daemon  up (pid ${ready.pid})\n` : "daemon  down\n");
       } finally {
         db.close();
       }
@@ -274,6 +306,8 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
     await runCommand(command, rest, io);
     return 0;
   } catch (err) {
+    // The supervisor has already printed its message.
+    if (err instanceof ExitCode) return err.code;
     const message = (err instanceof Error ? err.message : String(err)).replace(/\s*\n\s*/g, " ").trim();
     io.stderr.write(`hatch: ${message}\n`);
     return 1;
@@ -281,7 +315,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
 }
 
 function isCommand(name: string): boolean {
-  return ["add", "list", "show", "runs", "cancel", "retry", "status"].includes(name);
+  return ["add", "list", "show", "runs", "cancel", "retry", "status", "start"].includes(name);
 }
 
 export async function main(): Promise<void> {
