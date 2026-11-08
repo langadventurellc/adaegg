@@ -46,7 +46,9 @@ function toItem(row: Row): WorkItem {
   };
 }
 
-function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
+// Joins the caller's transaction when there is one, so a larger change commits or rolls back as a whole.
+export function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();
