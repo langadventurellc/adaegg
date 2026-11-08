@@ -573,6 +573,56 @@ describe("rollback", () => {
     expect(h.spawned).toHaveLength(2);
   });
 
+  // A real setup command: the shell starts a long sleep (like npm starting its children) and waits for it.
+  // A killed process nobody has reaped yet is a zombie: it is gone for our purposes.
+  const running = (pid: number): boolean => {
+    if (!isPidAlive(pid)) return false;
+    try {
+      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+    } catch {
+      return false;
+    }
+  };
+
+  // With `passFirst`, the first run only leaves a marker and succeeds; later runs hang.
+  const sleeperSetup = (passFirst = false) => {
+    const pidFile = join(scriptDir, `sleeper-${Date.now()}.pid`);
+    const marker = `${pidFile}.first`;
+    const readPid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : 0);
+    const hang = `sleep 300 & echo $! > ${pidFile}; wait`;
+    const command = passFirst ? `if [ -e ${marker} ]; then ${hang}; else touch ${marker}; fi` : hang;
+    return { command, readPid };
+  };
+
+  it("stops while a real setup runs before the start: ends the setup's whole process tree first", async () => {
+    const request = writeRequest(true);
+    const sleeper = sleeperSetup();
+    const h = harness(["healthy"], { config: { setup: sleeper.command, baseBranch: "main" } });
+    const done = runSupervisor(h.deps);
+    await waitFor(() => sleeper.readPid() > 0, "the setup's child to start");
+    const pid = sleeper.readPid();
+    expect(running(pid)).toBe(true);
+    h.signal();
+    expect(await done).toBe(0);
+    expect(running(pid)).toBe(false);
+    expect(h.spawned).toHaveLength(0);
+    expect(readFileSync(restartPath(stateDir), "utf8")).toContain(request.mergeCommit);
+  });
+
+  it("stops while a real setup runs after a rollback: ends the setup's whole process tree first", async () => {
+    makeMerge("broken", true);
+    const sleeper = sleeperSetup(true);
+    const h = harness(["exit:75", "by-repo"], { config: { setup: sleeper.command, baseBranch: "main" } });
+    const done = runSupervisor(h.deps);
+    await waitFor(() => sleeper.readPid() > 0, "the setup's child to start");
+    const pid = sleeper.readPid();
+    h.signal();
+    expect(await done).toBe(0);
+    expect(running(pid)).toBe(false);
+    expect(revertCommits()).toBe(1);
+    expect(h.spawned).toHaveLength(2);
+  });
+
   it.each([
     ["another branch", () => sh(repo, "checkout", "-b", "elsewhere")],
     ["a detached HEAD", () => sh(repo, "checkout", "--detach")],

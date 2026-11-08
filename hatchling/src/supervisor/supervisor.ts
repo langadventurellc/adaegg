@@ -95,13 +95,43 @@ function defaultSpawn(cwd: string, onOutput: (chunk: string) => void): ChildHand
   };
 }
 
+const SETUP_KILL_GRACE_MS = 5_000;
+
 function defaultRunSetup(root: string, command: string, signal: AbortSignal): Promise<number | null> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve(null);
-    // Aborting the signal sends SIGTERM to the command.
-    const child = nodeSpawn("sh", ["-c", command], { cwd: root, stdio: "inherit", signal });
+    // Its own process group, so aborting can end the shell and everything it started (npm and its children).
+    const child = nodeSpawn("sh", ["-c", command], { cwd: root, stdio: "inherit", detached: true });
+    const pgid = child.pid;
+    const killGroup = (sig: NodeJS.Signals) => {
+      if (pgid === undefined) return;
+      try {
+        process.kill(-pgid, sig);
+      } catch {
+        // already gone
+      }
+    };
+    let grace: ReturnType<typeof setTimeout> | undefined;
     child.on("error", () => resolve(null));
-    child.on("close", (code) => resolve(code));
+    child.on("close", (code) => {
+      clearTimeout(grace);
+      if (signal.aborted) {
+        // Whatever the shell left behind in the group must not outlive it.
+        killGroup("SIGKILL");
+        return resolve(null);
+      }
+      resolve(code);
+    });
+    signal.addEventListener(
+      "abort",
+      () => {
+        // The shell and its children (npm and its own) all get SIGTERM; the result is reported only once the shell is
+        // gone, and anything still running after the grace period is killed.
+        killGroup("SIGTERM");
+        grace = setTimeout(() => killGroup("SIGKILL"), SETUP_KILL_GRACE_MS);
+      },
+      { once: true },
+    );
   });
 }
 
