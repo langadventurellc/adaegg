@@ -87,6 +87,32 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 
 Every loop goes through an edge with a `max`, so a run cannot cycle forever; the third time checks fail the run fails with `loop checks:failed exceeded its limit of 2`. When `implement` runs again it is shown what sent it back (`checkOutput`, `findings` or `conflictFiles`). `implement` has `commit: true`, so its work is committed and an empty branch fails. `blocked` from an agent (not signed in) fails the run; fix the cause and `hatch retry` the item.
 
+## The shipped `request` and `verify` workflows
+
+`workflows/request.yaml` (trigger kind `request`, start `plan`) plans a request: the read-only `plan` node (an `agent` with `cwd: root` and `output: plan`, prompt `prompts/plan.md`) reads the main checkout and answers with a plan, then `enqueue` creates the chain of `item`s and, for two or more items, a verification. `workflows/verify.yaml` (trigger kind `verify`, start `verify`) runs the same shape with the `verify` node (prompt `prompts/verify.md`, model `review`): the verifier reads the code on the base branch and its plan holds only the missing work. An empty plan ends the request; otherwise `enqueue` queues the missing items and the next verification. There are at most `maxVerifyRounds` rounds (default 2); after that the verify item fails visibly with the items the verifier wanted. Neither workflow has a loop, so no edge has a `max`.
+
+`request`:
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `plan` | `done` | `enqueue` | |
+| `plan` | `failed` | `fail` | |
+| `plan` | `blocked` | `fail` | |
+| `enqueue` | `queued` | `end` | |
+| `enqueue` | `failed` | `fail` | |
+
+`verify`:
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `verify` | `done` | `enqueue` | |
+| `verify` | `failed` | `fail` | |
+| `verify` | `blocked` | `fail` | |
+| `enqueue` | `queued` | `end` | |
+| `enqueue` | `failed` | `fail` | |
+
+The planner and verifier must not write to the main checkout, because the `merge` node refuses a dirty one: they have only `Read`, `Glob`, `Grep` and read-only `git`/`ls` bash patterns, and `src/engine/workflows/request.test.ts` checks it. A failed item leaves the items blocked by it queued; `hatch retry` is the human step.
+
 ## Idempotent resume
 
 The runner writes `current_node` before the node runs. If the process stops (a crash, or SIGINT/SIGTERM, which abort the signal the nodes get), the run stays `running` and the next daemon start resumes it at `current_node`, so that node runs again. Every node must therefore be safe to run twice. A node whose work was cut short by an abort leaves no `node_runs` row.
