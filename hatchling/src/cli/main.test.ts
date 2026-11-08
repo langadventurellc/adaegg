@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { openDb } from "../engine/db.ts";
 import { type CliIo, runCli } from "./main.ts";
 
 const marker = join(import.meta.dirname, "..", "..", "adaegg.json");
@@ -189,6 +190,18 @@ describe("errors", () => {
 
   it("rejects an unknown blocker", async () => {
     expectOneLineError(await hatch(["add", "T", "--blocked-by", "deadbeef"]), /blocker not found/);
+  });
+
+  it("explains too-short and ambiguous --blocked-by prefixes and adds nothing", async () => {
+    const db = openDb(join(state, "hatch.db"));
+    for (const id of ["abcd1111-0000", "abcd2222-0000"]) {
+      db.prepare("INSERT INTO work_items (id, title, created_at, updated_at) VALUES (?, 't', 'x', 'x')").run(id);
+    }
+    db.close();
+    expectOneLineError(await hatch(["add", "T", "--blocked-by", "abc"]), /too short/);
+    expectOneLineError(await hatch(["add", "T", "--blocked-by", "abcd"]), /ambiguous id prefix abcd/);
+    const listed = JSON.parse((await hatch(["list", "--json"])).out) as unknown[];
+    expect(listed).toHaveLength(2);
   });
 
   it("rejects an unknown option", async () => {

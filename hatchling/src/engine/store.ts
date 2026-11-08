@@ -82,13 +82,19 @@ export function addWorkItem(db: DatabaseSync, input: NewWorkItem): WorkItem {
     const parentId = input.parentId === undefined ? null : getWorkItem(db, input.parentId).id;
     const blockers = new Set<string>();
     for (const ref of input.blockedBy ?? []) {
+      if (ref === id || (ref.length >= 4 && id.startsWith(ref))) {
+        throw new Error(`work item cannot block itself: ${ref}`);
+      }
       let blocker: WorkItem;
       try {
         blocker = getWorkItem(db, ref);
-      } catch {
-        throw new Error(`blocker not found: ${ref}`);
+      } catch (err) {
+        // Keep the too-short and ambiguous explanations; only a miss becomes "not found".
+        if (err instanceof Error && err.message.startsWith("no work item matches")) {
+          throw new Error(`blocker not found: ${ref}`);
+        }
+        throw err;
       }
-      if (blocker.id === id) throw new Error(`work item cannot block itself: ${ref}`);
       blockers.add(blocker.id);
     }
     const now = new Date().toISOString();

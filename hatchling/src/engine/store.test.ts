@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "./db.ts";
 import {
   addWorkItem,
@@ -12,8 +12,16 @@ import {
   retryWorkItem,
 } from "./store.ts";
 
+// A nonempty value makes randomUUID return it, so a test can aim a blocker at the new id.
+let nextUuid = "";
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, randomUUID: () => (nextUuid === "" ? actual.randomUUID() : nextUuid) };
+});
+
 let db: DatabaseSync;
 beforeEach(() => {
+  nextUuid = "";
   db = openDb(":memory:");
 });
 
@@ -44,9 +52,26 @@ describe("add and list", () => {
     expect(listWorkItems(db)[1]?.blockedBy).toEqual([a.id]);
   });
 
-  it("rejects a missing blocker and a self-block", () => {
+  it("rejects a missing blocker", () => {
     expect(() => addWorkItem(db, { title: "x", blockedBy: ["nonexistent"] })).toThrow("blocker not found: nonexistent");
     expect(listWorkItems(db)).toEqual([]);
+  });
+
+  it("rejects a self-block and leaves no item or edge", () => {
+    nextUuid = "11112222-3333-4444-5555-666677778888";
+    expect(() => addWorkItem(db, { title: "x", blockedBy: [nextUuid] })).toThrow("cannot block itself");
+    expect(() => addWorkItem(db, { title: "x", blockedBy: ["1111222"] })).toThrow("cannot block itself");
+    expect(listWorkItems(db)).toEqual([]);
+    expect(db.prepare("SELECT * FROM work_item_blocks").all()).toEqual([]);
+  });
+
+  it("keeps the too-short and ambiguous explanations for blockers", () => {
+    insertRaw("abcd1111-0000");
+    insertRaw("abcd2222-0000");
+    expect(() => addWorkItem(db, { title: "x", blockedBy: ["abc"] })).toThrow("id prefix too short: abc");
+    expect(() => addWorkItem(db, { title: "x", blockedBy: ["abcd"] })).toThrow("ambiguous id prefix abcd");
+    expect(db.prepare("SELECT id FROM work_items").all()).toHaveLength(2);
+    expect(db.prepare("SELECT * FROM work_item_blocks").all()).toEqual([]);
   });
 });
 
