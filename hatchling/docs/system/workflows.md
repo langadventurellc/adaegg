@@ -19,9 +19,26 @@ edges:
   - { from: checks, on: failed, to: branch, max: 2 }   # max bounds how often this edge may be taken in one run
 ```
 
-- `trigger.type` must be `queue`; `kind` is passed to `claimNext`.
+- `trigger` is `{ type: queue, kind }` or `{ type: cron, schedule }`; any other type is rejected (`supported: 'queue', 'cron'`). Whatever the trigger, the daemon claims with `claimNext(db, workflowKind(workflow))` (`src/engine/workflows/schema.ts`): the queue trigger's `kind`, or the workflow `id` for a cron workflow.
 - A node has an `id` (unique in the workflow), a `type` (a registered node type, see `src/engine/nodes/index.ts`) and an optional `config`, validated by that type's Zod schema.
 - `to` is a node id or one of the reserved targets `end` (the run succeeded) and `fail` (the run failed).
+
+## The `cron` trigger
+
+```yaml
+trigger: { type: cron, schedule: "17 3 * * *" }   # 03:17 every day, machine local time
+```
+
+`schedule` has five fields (minute, hour, day of month, month, day of week) with crontab syntax: `*`, numbers, `a-b`, comma lists, `/n` steps after `*` or a range, three-letter month and weekday names, and weekday 0 or 7 for Sunday. When both day fields are restricted a day matches if either does. Macros such as `@daily` are not supported. Times are the machine's local time. The parser is `src/engine/cron.ts`.
+
+At the start of each daemon tick, `fireDueSchedules` (`src/engine/schedule.ts`) handles every cron workflow in one transaction:
+
+- The `schedules` table (`workflow_id`, `last_checked_at`) records when the schedule was last checked. It is in SQLite, not memory, so a restart after a self-change (exit 75) neither fires twice nor loses a slot.
+- First sight of a workflow (no row) inserts the current time and fires nothing: installing a hatchling or adding a schedule never fires at once.
+- If the next slot after `last_checked_at` is at or before now, `last_checked_at` becomes now and one work item is added, with the workflow's `name` as title and the workflow `id` as kind. A daemon that was down fires one catch-up run, never a backlog.
+- If an item of that kind is already `queued` or `in_progress`, no item is added, but `last_checked_at` still advances, so a slow run never piles up copies.
+
+The daemon claims these items through the normal runner, and only the workflow with that id claims them. Nothing fires while a restart is pending or `restart.json` exists.
 
 ## Outcomes and edges
 
@@ -38,7 +55,9 @@ Going to `end` marks the run `succeeded` and the work item `done`. Going to `fai
 - every `on` is an outcome the node's type declares;
 - every outcome a node type declares has an edge from that node;
 - each node's `config` passes its type's schema;
-- the trigger type is `queue`, and workflow ids are unique.
+- the trigger type is `queue` or `cron`, and workflow ids are unique;
+- a cron `schedule` parses (the error names the bad field) and runs at least once within 5 years (`0 0 31 2 *` never does);
+- no cron workflow has an id equal to the `kind` of a queue workflow, because it would claim that queue's items.
 
 These checks exist because a workflow is rewritten by the system itself. A mistake must fail when the daemon starts (it prints the problems to stderr and exits 1), not midway through a run on a real work item. In particular, requiring an edge for every declared outcome means a rewrite cannot leave an outcome unhandled.
 

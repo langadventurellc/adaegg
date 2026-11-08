@@ -25,6 +25,8 @@ Blockers are rows in `work_item_blocks(item_id, blocked_by_id)`.
 - `request`: planned into a chain of `item`s.
 - `verify`: checks that a request was delivered.
 
+- A cron workflow's id: scheduled items. `fireDueSchedules` adds one, titled with the workflow's `name`, when its schedule is due and none of that kind is `queued` or `in_progress` (see the `cron` trigger in `workflows.md`).
+
 The `parent_id` of planned items and of their verification is the root request.
 
 ## Statuses and transitions

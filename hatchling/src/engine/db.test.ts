@@ -40,7 +40,7 @@ describe("openDb", () => {
     old.close();
 
     const db = openDb(path);
-    expect(pragma(db, "user_version").user_version).toBe(3);
+    expect(pragma(db, "user_version").user_version).toBe(MIGRATIONS.length);
     expect(db.prepare("SELECT id, source_id FROM work_items").all()).toEqual([{ id: "a", source_id: null }]);
     db.close();
   });
@@ -48,7 +48,7 @@ describe("openDb", () => {
   it("works on :memory:", () => {
     const db = openDb(":memory:");
     expect(pragma(db, "user_version").user_version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(3);
+    expect(MIGRATIONS.length).toBe(4);
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
     const names = tables.map((t) => t.name);
     expect(names).toContain("runs");
