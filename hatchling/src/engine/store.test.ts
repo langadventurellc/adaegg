@@ -8,6 +8,7 @@ import {
   failWorkItem,
   finishWorkItem,
   getWorkItem,
+  hasItemsFromSource,
   listWorkItems,
   markReverted,
   retryWorkItem,
@@ -51,6 +52,29 @@ describe("add and list", () => {
     const b = addWorkItem(db, { title: "b", blockedBy: [a.id.slice(0, 6)], parentId: a.id.slice(0, 6) });
     expect(b.parentId).toBe(a.id);
     expect(listWorkItems(db)[1]?.blockedBy).toEqual([a.id]);
+  });
+
+  it("round-trips sourceId, resolving a prefix, and defaults it to null", () => {
+    const a = addWorkItem(db, { title: "a" });
+    expect(a.sourceId).toBeNull();
+    const b = addWorkItem(db, { title: "b", sourceId: a.id.slice(0, 6) });
+    expect(b.sourceId).toBe(a.id);
+    expect(getWorkItem(db, b.id).sourceId).toBe(a.id);
+    expect(listWorkItems(db).map((i) => i.sourceId)).toEqual([null, a.id]);
+  });
+
+  it("rejects an unknown source", () => {
+    expect(() => addWorkItem(db, { title: "x", sourceId: "nonexistent" })).toThrow("no work item matches nonexistent");
+    expect(listWorkItems(db)).toEqual([]);
+  });
+
+  it("hasItemsFromSource is true only for a source that created items", () => {
+    const a = addWorkItem(db, { title: "a" });
+    const other = addWorkItem(db, { title: "other" });
+    expect(hasItemsFromSource(db, a.id)).toBe(false);
+    addWorkItem(db, { title: "b", sourceId: a.id });
+    expect(hasItemsFromSource(db, a.id)).toBe(true);
+    expect(hasItemsFromSource(db, other.id)).toBe(false);
   });
 
   it("rejects a missing blocker", () => {

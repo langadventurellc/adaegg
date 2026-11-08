@@ -79,6 +79,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           attempt,
           state: run.state,
           config: parsedConfig.data,
+          db,
           paths,
           appConfig,
           signal,

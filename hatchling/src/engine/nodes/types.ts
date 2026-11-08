@@ -1,5 +1,7 @@
+import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { Config } from "../config.ts";
+import { PlanSchema } from "../plan.ts";
 import type { WorkItem } from "../store.ts";
 
 // The run's JSON state. Nodes talk to each other only through it.
@@ -18,6 +20,8 @@ export const RunStateSchema = z.object({
   mergeCommit: z.string().nullable().default(null),
   changedPaths: z.array(z.string()).default([]),
   problem: z.string().nullable().default(null),
+  // The planner's validated plan; null until a plan node sets it.
+  plan: PlanSchema.nullable().default(null),
 });
 
 export type RunState = z.infer<typeof RunStateSchema>;
@@ -40,6 +44,7 @@ export type NodeContext<C> = {
   attempt: number;
   state: RunState;
   config: C;
+  db: DatabaseSync;
   paths: { root: string; stateDir: string };
   appConfig: Config;
   signal: AbortSignal;
