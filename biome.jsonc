@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": ["**", "!pnpm-lock.yaml"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      // A later rule with the same selector silently restyles every existing user of the class
+      // (the .link-button pills, 0375f25a). Rename or scope the new class instead.
+      "nursery": { "noDuplicateSelectors": "error" },
+      // A project built from this template that adds one global stylesheet would get false warnings across
+      // unrelated components (.prose p + p against every later .x p), and warnings fail lint.
+      "style": { "noDescendingSpecificity": "off" }
+    }
+  },
+  "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } }
+}
