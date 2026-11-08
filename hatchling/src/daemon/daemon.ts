@@ -1,7 +1,14 @@
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Config } from "../engine/config.ts";
-import { type RestartRequest, touchesRestartPaths, writeRestartRequest } from "../engine/lifecycle.ts";
-import { git } from "../engine/nodes/git.ts";
+import {
+  type RestartRequest,
+  readRestartRequest,
+  restartPath,
+  touchesRestartPaths,
+  writeRestartRequest,
+} from "../engine/lifecycle.ts";
+import { git, isAncestor } from "../engine/nodes/git.ts";
 import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { createRunner } from "../engine/runner.ts";
 import { listRunningRuns, type Run } from "../engine/runs.ts";
@@ -39,14 +46,36 @@ export function createDaemon(deps: DaemonDeps): Daemon {
   // After a run whose merge changed the daemon's own code: record the request and stop claiming.
   function requestRestartIfNeeded(run: Run): void {
     const { mergeCommit, changedPaths } = run.state;
-    if (restartPending || run.status !== "succeeded" || !mergeCommit || !touchesRestartPaths(changedPaths)) return;
+    if (run.status !== "succeeded" || !mergeCommit || !touchesRestartPaths(changedPaths)) return;
     try {
-      const request: RestartRequest = {
-        mergeCommit,
-        workItemId: run.workItemId,
-        preMergeHead: git(deps.paths.root, "rev-parse", `${mergeCommit}^1`),
-        requestedAt: new Date().toISOString(),
-      };
+      const root = deps.paths.root;
+      // A request already pending (here, or left by a run resumed while the supervisor still has the previous merge on
+      // probation) keeps covering its merges: the new one is added, never written over it.
+      const existing = restartPending ?? readRestartRequest(deps.paths.stateDir);
+      let request: RestartRequest;
+      if (existing) {
+        const newer = isAncestor(root, existing.mergeCommit, mergeCommit);
+        const [latest, other] = newer
+          ? [{ mergeCommit, workItemId: run.workItemId }, existing]
+          : [existing, { mergeCommit, workItemId: run.workItemId }];
+        request = {
+          mergeCommit: latest.mergeCommit,
+          workItemId: latest.workItemId,
+          preMergeHead: existing.preMergeHead,
+          requestedAt: new Date().toISOString(),
+          earlier: [
+            ...(existing.earlier ?? []),
+            { mergeCommit: other.mergeCommit, workItemId: other.workItemId },
+          ].filter((m) => m.mergeCommit !== latest.mergeCommit),
+        };
+      } else {
+        request = {
+          mergeCommit,
+          workItemId: run.workItemId,
+          preMergeHead: git(root, "rev-parse", `${mergeCommit}^1`),
+          requestedAt: new Date().toISOString(),
+        };
+      }
       writeRestartRequest(deps.paths.stateDir, request);
       restartPending = request;
     } catch (err) {
@@ -79,10 +108,13 @@ export function createDaemon(deps: DaemonDeps): Daemon {
     },
 
     async tick() {
-      if (controller.signal.aborted || restartPending) return;
+      // While restart.json exists the supervisor is still judging a self-change (this daemon is on probation), so
+      // claim nothing: a second self-change now would race the supervisor's verdict on the first.
+      const blocked = () => restartPending !== null || existsSync(restartPath(deps.paths.stateDir));
+      if (controller.signal.aborted || blocked()) return;
       for (const workflow of workflows) {
         if (workflow.trigger.type !== "queue") continue;
-        while (inFlight.size < appConfig.maxConcurrentRuns && !controller.signal.aborted && !restartPending) {
+        while (inFlight.size < appConfig.maxConcurrentRuns && !controller.signal.aborted && !blocked()) {
           let item: ReturnType<typeof claimNext>;
           try {
             item = claimNext(db, workflow.trigger.kind);

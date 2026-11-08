@@ -153,6 +153,57 @@ describe("restart request", () => {
     expect(exits).toEqual([75]);
   });
 
+  it("claims nothing while restart.json exists, as the supervisor is still judging a self-change", async () => {
+    const item = addWorkItem(db, { title: "waits" });
+    writeFileSync(
+      restartPath(stateDir),
+      JSON.stringify({
+        mergeCommit: "a".repeat(40),
+        workItemId: "x",
+        preMergeHead: "b".repeat(40),
+        requestedAt: new Date().toISOString(),
+      }),
+    );
+    const { daemon, exits } = await start(async () => ({ outcome: "ok" }));
+    await daemon.tick();
+    expect(getWorkItem(db, item.id).status).toBe("queued");
+    expect(exits).toEqual([]);
+  });
+
+  it("covers every self-changing merge that finishes while draining in one request", async () => {
+    const first = addWorkItem(db, { title: "first" });
+    const second = addWorkItem(db, { title: "second" });
+    const slow = addWorkItem(db, { title: "slow" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const merges: Record<string, string> = {};
+    const { exits } = await start(
+      async (ctx) => {
+        if (ctx.workItem.id === slow.id) {
+          await gate;
+          return { outcome: "ok" };
+        }
+        const state = mergeFile(root, `src/${ctx.workItem.title}.ts`, ctx.workItem.title);
+        merges[ctx.workItem.id] = state.mergeCommit;
+        return { outcome: "ok", state };
+      },
+      { maxConcurrentRuns: 3 },
+    );
+    await waitFor(() => getWorkItem(db, first.id).status === "done" && getWorkItem(db, second.id).status === "done");
+    expect(exits).toEqual([]);
+    release();
+    await waitFor(() => exits.length > 0);
+    const request = readRestartRequest(stateDir);
+    expect(request?.mergeCommit).toBe(sh(root, "rev-parse", "HEAD"));
+    expect(request?.preMergeHead).toBe(sh(root, "rev-parse", `${merges[first.id]}^1`));
+    const covered = [request?.mergeCommit, ...(request?.earlier ?? []).map((m) => m.mergeCommit)].sort();
+    expect(covered).toEqual([merges[first.id], merges[second.id]].sort());
+    expect(request?.workItemId).toBe(second.id);
+    expect(request?.earlier).toEqual([{ mergeCommit: merges[first.id], workItemId: first.id }]);
+  });
+
   it("requests no restart when rev-parse fails", async () => {
     addWorkItem(db, { title: "bad" });
     const { exits } = await start(async () => ({

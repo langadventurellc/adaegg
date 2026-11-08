@@ -161,7 +161,7 @@ function harness(behaviors: string[], over: Partial<SupervisorDeps> = {}): Harne
   const deps: SupervisorDeps = {
     root: repo,
     stateDir,
-    config: { setup: "" },
+    config: { setup: "", baseBranch: "main" },
     echo: null,
     stdout: { write: () => true },
     stderr: {
@@ -264,9 +264,10 @@ describe("runSupervisor", () => {
     const request = writeRequest(touchPackage);
     const setupCalls: [string, string][] = [];
     const h = harness(["healthy"], {
-      config: { setup: "npm ci" },
+      config: { setup: "npm ci", baseBranch: "main" },
       runSetup: (root, command) => {
         setupCalls.push([root, command]);
+        return 0;
       },
     });
     const done = runSupervisor(h.deps);
@@ -284,6 +285,7 @@ describe("runSupervisor", () => {
     const h = harness(["healthy"], {
       runSetup: (_r, c) => {
         setupCalls.push(c);
+        return 0;
       },
     });
     const done = runSupervisor(h.deps);
@@ -362,7 +364,7 @@ describe("runSupervisor", () => {
 });
 
 describe("rollback", () => {
-  const revertCommits = () => commits("--grep=^Revert").length;
+  const revertCommits = () => commits("--grep=^Revert").filter((c) => c !== "").length;
 
   async function runUntilHealthy(h: Harness, starts: number) {
     const done = runSupervisor(h.deps);
@@ -448,9 +450,10 @@ describe("rollback", () => {
     makeMerge("broken", touchPackage);
     const setupCalls: string[] = [];
     const h = harness(["exit:75", "by-repo", "by-repo"], {
-      config: { setup: "npm ci" },
+      config: { setup: "npm ci", baseBranch: "main" },
       runSetup: (_root, command) => {
         setupCalls.push(command);
+        return 0;
       },
     });
     expect(await runUntilHealthy(h, 3)).toBe(0);
@@ -466,5 +469,147 @@ describe("rollback", () => {
     expect(h.spawned).toHaveLength(5);
     expect(h.stderr()).toContain("the hatchling won't start");
     expect(existsSync(restartPath(stateDir))).toBe(false);
+  });
+
+  it.each([
+    ["a failing", 1],
+    ["a killed", null],
+  ])("rolls back when setup before the start is %s command", async (_name, status) => {
+    makeMerge("ok", true);
+    const setupCalls: string[] = [];
+    const h = harness(["exit:75", "healthy"], {
+      config: { setup: "npm ci", baseBranch: "main" },
+      // Fails before the new daemon starts; the rerun after the revert succeeds.
+      runSetup: (_root, command) => {
+        setupCalls.push(command);
+        return setupCalls.length === 1 ? status : 0;
+      },
+    });
+    expect(await runUntilHealthy(h, 2)).toBe(0);
+    expect(setupCalls).toHaveLength(2);
+    expect(revertCommits()).toBe(1);
+    expect(existsSync(restartPath(stateDir))).toBe(false);
+    const item = itemStatus();
+    expect(item.status).toBe("failed");
+    expect(item.error).toContain("setup failed");
+  });
+
+  it.each([
+    ["a failing", 2],
+    ["a killed", null],
+  ])("records the reverted item when setup after the revert is %s command", async (_name, status) => {
+    makeMerge("broken", true);
+    let calls = 0;
+    const h = harness(["exit:75", "by-repo"], {
+      config: { setup: "npm ci", baseBranch: "main" },
+      runSetup: () => (++calls === 1 ? 0 : status),
+    });
+    expect(await runSupervisor(h.deps)).toBe(1);
+    expect(revertCommits()).toBe(1);
+    expect(itemStatus().status).toBe("failed");
+    expect(h.stderr()).toContain("setup failed after the revert");
+    expect(h.spawned).toHaveLength(2);
+  });
+
+  it.each([
+    ["another branch", () => sh(repo, "checkout", "-b", "elsewhere")],
+    ["a detached HEAD", () => sh(repo, "checkout", "--detach")],
+  ])("does not revert or drop the request on %s", async (_name, checkout) => {
+    const request = makeMerge("broken");
+    const h = harness(["exit:75", "by-repo"]);
+    checkout(); // still contains the merge, so the daemon still fails
+    const head = sh(repo, "rev-parse", "HEAD");
+    expect(await runSupervisor(h.deps)).toBe(1);
+    expect(sh(repo, "rev-parse", "HEAD")).toBe(head);
+    expect(revertCommits()).toBe(0);
+    expect(readFileSync(restartPath(stateDir), "utf8")).toContain(request.mergeCommit);
+    expect(itemStatus().status).toBe("done");
+    expect(h.stderr()).toContain("not 'main'");
+  });
+
+  it("keeps a request written during probation when the first one's stable time passes", async () => {
+    const first = makeMerge("fine");
+    const h = harness(["exit:75", "healthy"], { timing: { stableMs: 100, pollMs: 5, restartDelayMs: 5 } });
+    const done = runSupervisor(h.deps);
+    await waitFor(() => h.spawned.length === 2 && existsSync(join(stateDir, "ready.json")), "a healthy probation");
+    const second: RestartRequest = {
+      mergeCommit: first.mergeCommit,
+      workItemId: "item-2",
+      preMergeHead: first.preMergeHead,
+      requestedAt: new Date(Date.now() + 1000).toISOString(),
+      earlier: [{ mergeCommit: first.preMergeHead, workItemId: first.workItemId }],
+    };
+    writeRestartRequest(stateDir, second);
+    await sleepReal(300);
+    expect(JSON.parse(readFileSync(restartPath(stateDir), "utf8"))).toMatchObject({ workItemId: "item-2" });
+    h.signal();
+    expect(await done).toBe(0);
+  });
+
+  it("reverts every merge a request covers, newest first, and fails each item", async () => {
+    const first = makeMerge("broken");
+    const db = openDb(dbFile);
+    const secondId = addWorkItem(db, { title: "second change" }).id;
+    claimNext(db, "item");
+    finishWorkItem(db, secondId);
+    db.close();
+    sh(repo, "checkout", "-b", "feature2");
+    writeFileSync(join(repo, "second.txt"), "second\n");
+    sh(repo, "add", "-A");
+    sh(repo, "commit", "-m", "second work");
+    sh(repo, "checkout", "main");
+    sh(repo, "merge", "--no-ff", "-m", "Merge feature2", "feature2");
+    mergeRequest = {
+      mergeCommit: sh(repo, "rev-parse", "HEAD"),
+      workItemId: secondId,
+      preMergeHead: first.preMergeHead,
+      requestedAt: new Date().toISOString(),
+      earlier: [{ mergeCommit: first.mergeCommit, workItemId: first.workItemId }],
+    };
+    const h = harness(["exit:75", "by-repo", "by-repo"]);
+    expect(await runUntilHealthy(h, 3)).toBe(0);
+    expect(revertCommits()).toBe(2);
+    expect(existsSync(join(repo, "second.txt"))).toBe(false);
+    expect(readFileSync(join(repo, "mode.txt"), "utf8")).toBe("ok\n");
+    expect(itemStatus().status).toBe("failed");
+    const dbCheck = openDb(dbFile);
+    expect(getWorkItem(dbCheck, secondId).status).toBe("failed");
+    dbCheck.close();
+  });
+});
+
+describe("process shutdown", () => {
+  it("exits promptly after SIGTERM once the daemon has stopped, without waiting out the grace period", async () => {
+    const runner = join(scriptDir, "run-supervisor.mjs");
+    writeFileSync(
+      runner,
+      `
+import { spawn } from "node:child_process";
+import { runSupervisor } from ${JSON.stringify(new URL("./supervisor.ts", import.meta.url).href)};
+const [root, stateDir, daemon] = process.argv.slice(2);
+const none = { write: () => true };
+process.exitCode = await runSupervisor({
+  root,
+  stateDir,
+  config: { setup: "", baseBranch: "main" },
+  echo: null,
+  stdout: none,
+  stderr: none,
+  spawn(cwd, onOutput) {
+    const child = spawn("node", [daemon, stateDir, "healthy"], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.on("data", (d) => onOutput(String(d)));
+    child.stderr.on("data", (d) => onOutput(String(d)));
+    return { pid: child.pid, onExit: (cb) => child.on("close", cb), kill: (s) => child.kill(s) };
+  },
+});
+`,
+    );
+    const supervisor = nodeSpawn("node", [runner, repo, stateDir, script], { stdio: "ignore" });
+    const exited = new Promise<number | null>((resolve) => supervisor.on("exit", resolve));
+    await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
+    const sentAt = Date.now();
+    supervisor.kill("SIGTERM");
+    expect(await exited).toBe(0);
+    expect(Date.now() - sentAt).toBeLessThan(4000);
   });
 });

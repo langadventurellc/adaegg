@@ -7,12 +7,13 @@ import { openDb } from "../engine/db.ts";
 import {
   deleteReady,
   deleteRestartRequest,
+  deleteRestartRequestIfUnchanged,
   RESTART_EXIT_CODE,
   type RestartRequest,
   readReady,
   readRestartRequest,
 } from "../engine/lifecycle.ts";
-import { git, isClean } from "../engine/nodes/git.ts";
+import { currentBranch, git, isClean } from "../engine/nodes/git.ts";
 import { dbPath } from "../engine/paths.ts";
 import { markReverted } from "../engine/store.ts";
 
@@ -49,7 +50,7 @@ type Writer = { write(text: string): unknown };
 export type SupervisorDeps = {
   root: string;
   stateDir: string;
-  config: Pick<Config, "setup">;
+  config: Pick<Config, "setup" | "baseBranch">;
   // Starts the daemon in `cwd`; `onOutput` receives everything it prints.
   spawn?: (cwd: string, onOutput: (chunk: string) => void) => ChildHandle;
   sleep?: (ms: number) => Promise<void>;
@@ -59,8 +60,8 @@ export type SupervisorDeps = {
   stderr?: Writer;
   // Where the daemon's output is echoed; defaults to stdout when it is a terminal.
   echo?: Writer | null;
-  // Returns the command's exit status; a non-zero status stops the supervisor.
-  runSetup?: (root: string, command: string) => number | null | undefined;
+  // Returns the command's exit status (null when it was killed or could not start); anything but 0 is a failure.
+  runSetup?: (root: string, command: string) => number | null;
   // Registers a handler for SIGINT/SIGTERM and returns a function that removes it.
   signals?: (handler: () => void) => () => void;
   // Called when a daemon started after a self-change did not come up healthy; it has exited by then.
@@ -108,6 +109,8 @@ function defaultSignals(handler: () => void): () => void {
 
 const MAX_BUFFER = 64 * 1024;
 
+const describeStatus = (status: number | null): string => (status === null ? "no exit status" : `exit ${status}`);
+
 export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
   const { root, stateDir } = deps;
   const timing: Timing = { ...DEFAULT_TIMING, ...deps.timing };
@@ -144,8 +147,29 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
 
   // Reverts the merge of a restart request whose daemon did not come up healthy. Never `git reset`: the revert is a
   // new commit, so nothing but the merge's changes is undone.
-  const rollback = async (request: RestartRequest, tail: string): Promise<"retry" | "exit"> => {
+  const rollback = async (held: RestartRequest, tail: string): Promise<"retry" | "exit"> => {
+    // The request on disk may have grown since the supervisor read it (a later self-change added its merge).
+    let request = held;
+    try {
+      request = readRestartRequest(stateDir) ?? held;
+    } catch {
+      // keep the one this daemon was started for
+    }
     stderr.write(`the new daemon did not come up healthy after merge ${request.mergeCommit}; rolling it back\n`);
+    let branch: string;
+    try {
+      branch = currentBranch(root);
+    } catch {
+      branch = "(unknown)";
+    }
+    if (branch !== deps.config.baseBranch) {
+      stderr.write(
+        `the checkout ${root} is on '${branch === "HEAD" ? "a detached HEAD" : branch}', not '${deps.config.baseBranch}', ` +
+          `so the merge was not reverted. Check out '${deps.config.baseBranch}', then revert ${request.mergeCommit} ` +
+          `by hand (git revert -m 1 ${request.mergeCommit}). Daemon log: ${logFile}\n`,
+      );
+      return "exit";
+    }
     if (!isClean(root)) {
       stderr.write(
         `the checkout ${root} has uncommitted changes, so the merge was not reverted:\n${git(root, "status", "--short")}\n` +
@@ -156,40 +180,65 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
     }
     // Delete the request before reverting, so a supervisor killed mid-rollback and restarted reverts nothing again.
     deleteRestartRequest(stateDir);
+    // Newest first, so each revert applies on top of the merges that came after it.
+    const merges = [{ mergeCommit: request.mergeCommit, workItemId: request.workItemId }, ...(request.earlier ?? [])];
+    let order: string[] = [];
     try {
-      const parents = git(root, "rev-list", "--parents", "-n", "1", request.mergeCommit).split(" ").length - 1;
-      git(root, "revert", ...(parents > 1 ? ["-m", "1"] : []), "--no-edit", request.mergeCommit);
-    } catch (err) {
+      order = git(root, "rev-list", "--first-parent", "HEAD").split("\n");
+    } catch {
+      // keep the request's order
+    }
+    const rank = (m: { mergeCommit: string }) => {
+      const i = order.indexOf(m.mergeCommit);
+      return i === -1 ? order.length : i;
+    };
+    merges.sort((a, b) => rank(a) - rank(b));
+    const reverted: typeof merges = [];
+    let failure: string | null = null;
+    for (const merge of merges) {
       try {
-        git(root, "revert", "--abort");
-      } catch {
-        // nothing to abort
+        const parents = git(root, "rev-list", "--parents", "-n", "1", merge.mergeCommit).split(" ").length - 1;
+        git(root, "revert", ...(parents > 1 ? ["-m", "1"] : []), "--no-edit", merge.mergeCommit);
+        reverted.push(merge);
+      } catch (err) {
+        try {
+          git(root, "revert", "--abort");
+        } catch {
+          // nothing to abort
+        }
+        failure = `reverting ${merge.mergeCommit} failed: ${err instanceof Error ? err.message : String(err)}\n`;
+        break;
       }
-      stderr.write(`reverting ${request.mergeCommit} failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    // Record what was reverted before anything else can fail, so a done item never stays done after its merge is gone.
+    for (const merge of reverted) {
+      try {
+        const db = openDatabase();
+        try {
+          markReverted(
+            db,
+            merge.workItemId,
+            `Its merge stopped the hatchling from restarting, so it was reverted. Last daemon output: ${tail}`,
+          );
+        } finally {
+          db.close();
+        }
+      } catch (err) {
+        stderr.write(
+          `could not mark ${merge.workItemId} as reverted: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
+    if (failure !== null) {
+      stderr.write(failure);
       return "exit";
     }
     if (deps.config.setup !== "" && packagesChanged(request)) {
       const status = runSetup(root, deps.config.setup);
-      if (status !== undefined && status !== null && status !== 0) {
-        stderr.write(`setup failed (exit ${status}): ${deps.config.setup}\n`);
+      if (status !== 0) {
+        stderr.write(`setup failed after the revert (${describeStatus(status)}): ${deps.config.setup}\n`);
         return "exit";
       }
-    }
-    try {
-      const db = openDatabase();
-      try {
-        markReverted(
-          db,
-          request.workItemId,
-          `Its merge stopped the hatchling from restarting, so it was reverted. Last daemon output: ${tail}`,
-        );
-      } finally {
-        db.close();
-      }
-    } catch (err) {
-      stderr.write(
-        `could not mark ${request.workItemId} as reverted: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
     }
     stderr.write(`reverted ${request.mergeCommit}; starting the hatchling again\n`);
     return "retry";
@@ -203,7 +252,15 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
   const terminate = async (c: NonNullable<typeof current>) => {
     if (c.isExited()) return;
     c.child.kill("SIGTERM");
-    await Promise.race([c.exited, sleep(timing.killGraceMs)]);
+    // A real timer that is cleared: a pending one would keep the process alive after the daemon is gone.
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      c.exited,
+      new Promise<void>((resolve) => {
+        grace = setTimeout(resolve, timing.killGraceMs);
+      }),
+    ]);
+    clearTimeout(grace);
     if (!c.isExited()) {
       c.child.kill("SIGKILL");
       await c.exited;
@@ -224,9 +281,14 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
       const request = readRestartRequest(stateDir);
       if (request && deps.config.setup !== "" && packagesChanged(request)) {
         const status = runSetup(root, deps.config.setup);
-        if (status !== undefined && status !== null && status !== 0) {
-          stderr.write(`setup failed (exit ${status}): ${deps.config.setup}\n`);
-          return 1;
+        if (status !== 0) {
+          // The new code cannot start without its dependencies, so this is a failed start: roll the merge back.
+          const message = `setup failed (${describeStatus(status)}): ${deps.config.setup}\n`;
+          stderr.write(message);
+          onOutput(message);
+          const verdict = await onProbationFailed(request, lastLines(20));
+          if (verdict === "exit") return 1;
+          continue;
         }
       }
       if (stopping) break;
@@ -258,7 +320,8 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
               break;
             }
           } else if (t - readyAt >= timing.stableMs) {
-            deleteRestartRequest(stateDir);
+            // A request written since (another self-change) is not this daemon's to clear.
+            deleteRestartRequestIfUnchanged(stateDir, request);
             stable = true;
             break;
           }

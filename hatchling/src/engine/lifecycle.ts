@@ -5,11 +5,17 @@ import { z } from "zod";
 // Exit code the daemon uses to ask its supervisor for a restart.
 export const RESTART_EXIT_CODE = 75;
 
+const MergeRefSchema = z.object({ mergeCommit: z.string(), workItemId: z.string() });
+export type MergeRef = z.infer<typeof MergeRefSchema>;
+
+// `mergeCommit` is the newest self-changing merge and `preMergeHead` the first parent of the oldest; `earlier` holds
+// the other merges that one restart covers, so a rollback reverts all of them.
 export const RestartRequestSchema = z.object({
   mergeCommit: z.string(),
   workItemId: z.string(),
   preMergeHead: z.string(),
   requestedAt: z.string().datetime(),
+  earlier: z.array(MergeRefSchema).optional(),
 });
 export type RestartRequest = z.infer<typeof RestartRequestSchema>;
 
@@ -60,6 +66,20 @@ export function readRestartRequest(stateDir: string): RestartRequest | null {
 
 export function deleteRestartRequest(stateDir: string): void {
   rmSync(restartPath(stateDir), { force: true });
+}
+
+// Deletes the request only if it is still `request`: a newer one written meanwhile must survive.
+export function deleteRestartRequestIfUnchanged(stateDir: string, request: RestartRequest): boolean {
+  let current: RestartRequest | null;
+  try {
+    current = readRestartRequest(stateDir);
+  } catch {
+    return false;
+  }
+  if (current === null) return true;
+  if (JSON.stringify(current) !== JSON.stringify(request)) return false;
+  deleteRestartRequest(stateDir);
+  return true;
 }
 
 export function writeReady(stateDir: string, ready: Ready): void {
