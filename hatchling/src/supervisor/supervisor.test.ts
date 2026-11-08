@@ -3,14 +3,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { isPidAlive, restartPath, writeRestartRequest } from "../engine/lifecycle.ts";
+import { openDb } from "../engine/db.ts";
+import { isPidAlive, type RestartRequest, restartPath, writeRestartRequest } from "../engine/lifecycle.ts";
 import { buildTemplateRepo, copyRepo, removeAllRepos, removeCopies, sh } from "../engine/nodes/test-repo.ts";
+import { addWorkItem, claimNext, finishWorkItem, getWorkItem } from "../engine/store.ts";
 import { type ChildHandle, runSupervisor, type SupervisorDeps } from "./supervisor.ts";
 
 // The fake daemon: `node daemon.mjs <stateDir> <behavior>`. Behaviors: `healthy` (publishes ready.json, stays up),
 // `never-ready` (stays up silently) and `exit:<code>`. On SIGTERM it prints a line and exits 0.
 const DAEMON = `
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const [stateDir, behavior] = process.argv.slice(2);
 console.log("daemon " + process.pid + " " + behavior);
@@ -18,6 +20,17 @@ process.on("SIGTERM", () => { console.log("got SIGTERM"); process.exit(0); });
 if (behavior.startsWith("exit:")) {
   console.error("boom");
   process.exit(Number(behavior.slice(5)));
+}
+if (behavior === "by-repo") {
+  // Behaves by the checked-out code: mode.txt starting with "broken" crashes, "silent" never becomes ready.
+  const mode = readFileSync(join(process.cwd(), "mode.txt"), "utf8").trim();
+  if (mode.startsWith("broken")) {
+    console.error("boom " + mode);
+    process.exit(1);
+  }
+  if (mode !== "silent") {
+    writeFileSync(join(stateDir, "ready.json"), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), head: "x" }));
+  }
 }
 if (behavior === "healthy") {
   writeFileSync(join(stateDir, "ready.json"), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), head: "x" }));
@@ -30,6 +43,10 @@ let scriptDir: string;
 let script: string;
 let repo: string;
 let stateDir: string;
+let dbFile: string;
+let itemId: string;
+// The restart request a "exit:75" start writes; a plain one when null.
+let mergeRequest: RestartRequest | null;
 
 beforeAll(() => {
   template = buildTemplateRepo();
@@ -47,6 +64,13 @@ beforeEach(() => {
   repo = copyRepo(template);
   stateDir = join(repo, ".adaegg");
   mkdirSync(stateDir, { recursive: true });
+  mergeRequest = null;
+  dbFile = join(stateDir, "hatch.db");
+  const db = openDb(dbFile);
+  itemId = addWorkItem(db, { title: "self change" }).id;
+  claimNext(db, "item");
+  finishWorkItem(db, itemId);
+  db.close();
 });
 
 afterEach(() => {
@@ -76,6 +100,43 @@ function makeRequest(touchPackage: boolean) {
     requestedAt: new Date().toISOString(),
   };
 }
+
+const itemStatus = () => {
+  const db = openDb(dbFile);
+  try {
+    return getWorkItem(db, itemId);
+  } finally {
+    db.close();
+  }
+};
+
+// A real --no-ff merge on main of a branch that sets mode.txt (and optionally changes package.json), after a
+// commit on main so the merge has two parents. The fake daemon behaves by mode.txt, so reverting the merge fixes it.
+function makeMerge(mode: string, touchPackage = false): RestartRequest {
+  writeFileSync(join(repo, "mode.txt"), "ok\n");
+  writeFileSync(join(repo, "package.json"), "{}\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-m", "base");
+  sh(repo, "checkout", "-b", "feature");
+  writeFileSync(join(repo, "mode.txt"), `${mode}\n`);
+  if (touchPackage) writeFileSync(join(repo, "package.json"), '{ "name": "x" }\n');
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-m", "feature work");
+  sh(repo, "checkout", "main");
+  writeFileSync(join(repo, "other.txt"), "other\n");
+  sh(repo, "add", "-A");
+  sh(repo, "commit", "-m", "other work on main");
+  sh(repo, "merge", "--no-ff", "-m", "Merge feature", "feature");
+  mergeRequest = {
+    mergeCommit: sh(repo, "rev-parse", "HEAD"),
+    workItemId: itemId,
+    preMergeHead: sh(repo, "rev-parse", "HEAD^1"),
+    requestedAt: new Date().toISOString(),
+  };
+  return mergeRequest;
+}
+
+const commits = (...args: string[]) => sh(repo, "log", "--format=%H", ...args).split("\n");
 
 function writeRequest(touchPackage = false) {
   const request = makeRequest(touchPackage);
@@ -127,9 +188,13 @@ function harness(behaviors: string[], over: Partial<SupervisorDeps> = {}): Harne
         handler = null;
       };
     },
+    openDb: () => openDb(dbFile),
     spawn: (cwd, onOutput) => {
       const behavior = behaviors[spawned.length] ?? "healthy";
-      if (behavior === "exit:75") writeRequest();
+      if (behavior === "exit:75") {
+        if (mergeRequest) writeRestartRequest(stateDir, mergeRequest);
+        else writeRequest();
+      }
       const child = nodeSpawn("node", [script, stateDir, behavior], { cwd, stdio: ["ignore", "pipe", "pipe"] });
       child.stdout.on("data", (d) => onOutput(String(d)));
       child.stderr.on("data", (d) => onOutput(String(d)));
@@ -260,11 +325,17 @@ describe("runSupervisor", () => {
     expect(h.spawned).toHaveLength(1);
   });
 
-  it("by default reports an unhealthy new daemon and returns 1", async () => {
+  it("by default reverts a single-parent commit and carries on when the item is not done", async () => {
     writeRequest();
-    const h = harness(["exit:1"]);
-    expect(await runSupervisor(h.deps)).toBe(1);
-    expect(h.stderr()).toContain("did not come up healthy");
+    const db = openDb(dbFile);
+    db.prepare("UPDATE work_items SET status = 'queued' WHERE id = ?").run(itemId);
+    db.close();
+    const h = harness(["exit:1", "exit:0"]);
+    expect(await runSupervisor(h.deps)).toBe(0);
+    expect(h.spawned).toHaveLength(2);
+    expect(h.stderr()).toContain("could not mark");
+    expect(existsSync(join(repo, "notes.md"))).toBe(false);
+    expect(itemStatus().status).toBe("queued");
   });
 
   it("starts again when onProbationFailed answers retry", async () => {
@@ -287,5 +358,113 @@ describe("runSupervisor", () => {
     expect(await done).toBe(0);
     expect(h.spawned).toHaveLength(1);
     expect(readFileSync(join(stateDir, "logs", "daemon.log"), "utf8")).toContain("got SIGTERM");
+  });
+});
+
+describe("rollback", () => {
+  const revertCommits = () => commits("--grep=^Revert").length;
+
+  async function runUntilHealthy(h: Harness, starts: number) {
+    const done = runSupervisor(h.deps);
+    await waitFor(() => h.spawned.length === starts && existsSync(join(stateDir, "ready.json")), "a healthy start");
+    h.signal();
+    return await done;
+  }
+
+  it("reverts a merge whose daemon crashes, marks the item failed and starts a healthy daemon", async () => {
+    const request = makeMerge("broken");
+    const before = commits();
+    const h = harness(["exit:75", "by-repo", "by-repo"]);
+    expect(await runUntilHealthy(h, 3)).toBe(0);
+
+    expect(existsSync(restartPath(stateDir))).toBe(false);
+    expect(readFileSync(join(repo, "mode.txt"), "utf8")).toBe("ok\n");
+    const item = itemStatus();
+    expect(item.status).toBe("failed");
+    expect(item.error).toMatch(
+      /^Its merge stopped the hatchling from restarting, so it was reverted\. Last daemon output: [\s\S]*boom broken/,
+    );
+
+    // The history keeps the merge and gains the revert; nothing earlier is dropped (no reset).
+    const firstParent = commits("--first-parent", "main");
+    expect(firstParent).toContain(request.mergeCommit);
+    expect(sh(repo, "log", "-1", "--format=%s", "main")).toMatch(/^Revert/);
+    expect(firstParent).toHaveLength(before.filter((c) => firstParent.includes(c)).length + 1);
+    const after = commits();
+    for (const c of before) expect(after).toContain(c);
+    expect(revertCommits()).toBe(1);
+  });
+
+  it("rolls back a daemon that never becomes ready", async () => {
+    makeMerge("silent");
+    const h = harness(["exit:75", "by-repo", "by-repo"], {
+      timing: { readyTimeoutMs: 150, stableMs: 60, restartDelayMs: 5, killGraceMs: 1000, pollMs: 5 },
+    });
+    expect(await runUntilHealthy(h, 3)).toBe(0);
+    expect(isPidAlive((h.spawned[1] as ChildHandle).pid)).toBe(false);
+    expect(revertCommits()).toBe(1);
+    expect(itemStatus().status).toBe("failed");
+    expect(existsSync(restartPath(stateDir))).toBe(false);
+  });
+
+  it("returns 1 without reverting when the checkout is dirty", async () => {
+    makeMerge("broken");
+    const head = sh(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "junk.txt"), "not mine\n");
+    const h = harness(["exit:75", "by-repo"]);
+    expect(await runSupervisor(h.deps)).toBe(1);
+    expect(sh(repo, "rev-parse", "HEAD")).toBe(head);
+    expect(itemStatus().status).toBe("done");
+    expect(h.stderr()).toContain("junk.txt");
+    expect(h.spawned).toHaveLength(2);
+  });
+
+  it("does not count a change under .adaegg/ as a dirty checkout", async () => {
+    makeMerge("broken");
+    writeFileSync(join(stateDir, "scratch.txt"), "state\n");
+    const h = harness(["exit:75", "by-repo", "by-repo"]);
+    expect(await runUntilHealthy(h, 3)).toBe(0);
+    expect(revertCommits()).toBe(1);
+  });
+
+  it("returns 1 and leaves a clean tree when the revert fails", async () => {
+    makeMerge("broken");
+    writeFileSync(join(repo, "mode.txt"), "broken again\n");
+    sh(repo, "commit", "-am", "later change to the same line");
+    const head = sh(repo, "rev-parse", "HEAD");
+    const h = harness(["exit:75", "by-repo"]);
+    expect(await runSupervisor(h.deps)).toBe(1);
+    expect(sh(repo, "rev-parse", "HEAD")).toBe(head);
+    expect(sh(repo, "status", "--porcelain")).toBe("");
+    expect(h.stderr()).toContain("failed");
+    expect(itemStatus().status).toBe("done");
+    expect(h.spawned).toHaveLength(2);
+  });
+
+  it.each([
+    [true, 2],
+    [false, 0],
+  ])("reruns setup on rollback only when package files changed (changed: %s)", async (touchPackage, calls) => {
+    makeMerge("broken", touchPackage);
+    const setupCalls: string[] = [];
+    const h = harness(["exit:75", "by-repo", "by-repo"], {
+      config: { setup: "npm ci" },
+      runSetup: (_root, command) => {
+        setupCalls.push(command);
+      },
+    });
+    expect(await runUntilHealthy(h, 3)).toBe(0);
+    // Once for the probation start, once after the revert.
+    expect(setupCalls).toHaveLength(calls);
+  });
+
+  it("does not revert twice for one request: a second failure is a plain crash bounded by the crash window", async () => {
+    makeMerge("broken");
+    const h = harness(["exit:75", "by-repo", "exit:1", "exit:1", "exit:1"]);
+    expect(await runSupervisor(h.deps)).toBe(1);
+    expect(revertCommits()).toBe(1);
+    expect(h.spawned).toHaveLength(5);
+    expect(h.stderr()).toContain("the hatchling won't start");
+    expect(existsSync(restartPath(stateDir))).toBe(false);
   });
 });
