@@ -29,7 +29,7 @@ export type CliIo = {
 
 const STATUSES: Status[] = ["queued", "in_progress", "done", "failed", "cancelled"];
 
-const HELP = `Usage: hatch <command> [options]
+export const HELP = `Usage: hatch <command> [options]
 
 Commands:
   add "<title>" [--file <path>] [--kind item|request] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
@@ -320,8 +320,10 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   }
 }
 
+export const COMMANDS = ["add", "list", "show", "runs", "cancel", "retry", "status", "start"];
+
 function isCommand(name: string): boolean {
-  return ["add", "list", "show", "runs", "cancel", "retry", "status", "start"].includes(name);
+  return COMMANDS.includes(name);
 }
 
 export async function main(): Promise<void> {
