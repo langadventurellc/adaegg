@@ -65,6 +65,20 @@ describe("add and list", () => {
     expect(db.prepare("SELECT * FROM work_item_blocks").all()).toEqual([]);
   });
 
+  it("resolves an existing prefix that the new id also starts with", () => {
+    insertRaw("abcd1111-0000");
+    nextUuid = "abcd2222-3333-4444-5555-666677778888";
+    const b = addWorkItem(db, { title: "x", blockedBy: ["abcd"] });
+    expect(listWorkItems(db).find((i) => i.id === b.id)?.blockedBy).toEqual(["abcd1111-0000"]);
+  });
+
+  it("reports ambiguity, not a self-block, when existing items share the prefix", () => {
+    insertRaw("abcd1111-0000");
+    insertRaw("abcd3333-0000");
+    nextUuid = "abcd2222-3333-4444-5555-666677778888";
+    expect(() => addWorkItem(db, { title: "x", blockedBy: ["abcd"] })).toThrow("ambiguous id prefix abcd");
+  });
+
   it("keeps the too-short and ambiguous explanations for blockers", () => {
     insertRaw("abcd1111-0000");
     insertRaw("abcd2222-0000");
