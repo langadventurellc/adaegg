@@ -64,6 +64,15 @@ export const mergeNode = defineNode({
     const id8 = ctx.workItem.id.slice(0, 8);
 
     const tip = git(root, "rev-parse", branch);
+
+    // Finish a fast-forward whose hatchStart update a crash cut off, before
+    // anything decides whether the branch has commits of its own.
+    const pending = getBranchConfig(root, branch, "hatchStartPending");
+    if (pending !== null) {
+      if (tip === pending) setBranchConfig(root, branch, "hatchStart", tip);
+      setBranchConfig(root, branch, "hatchStartPending", null);
+    }
+
     const done = findMergeCommit(root, base, branch, tip);
     if (done) return { outcome: "merged", state: { ...done, conflictFiles: [] } };
 
@@ -86,6 +95,9 @@ export const mergeNode = defineNode({
       // Written before the merge, so a crash right after it is still noticed.
       setBranchConfig(root, branch, "hatchMovedFrom", tip);
       const start = git(root, "rev-parse", branchStart(root, branch, base));
+      // A branch with no commits of its own will fast-forward to base; note where
+      // before merging so a crash before hatchStart moves is recovered on resume.
+      if (tip === start) setBranchConfig(root, branch, "hatchStartPending", git(root, "rev-parse", base));
       try {
         git(worktree, "merge", "--no-edit", base);
       } catch {
@@ -96,10 +108,12 @@ export const mergeNode = defineNode({
           // nothing to abort
         }
         setBranchConfig(root, branch, "hatchMovedFrom", null);
+        setBranchConfig(root, branch, "hatchStartPending", null);
         return { outcome: "conflict", problem: `merge of ${base} conflicts`, state: { conflictFiles } };
       }
       // A branch without commits of its own just fast-forwarded; it still has none.
       if (tip === start) setBranchConfig(root, branch, "hatchStart", git(worktree, "rev-parse", "HEAD"));
+      setBranchConfig(root, branch, "hatchStartPending", null);
       return { outcome: "moved", state: { conflictFiles: [] } };
     }
 

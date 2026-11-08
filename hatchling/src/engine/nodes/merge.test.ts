@@ -128,6 +128,35 @@ describe("merge node", () => {
     expect(result.problem).toContain("no commits of its own");
   });
 
+  describe("restart after an untouched branch fast-forwarded but before hatchStart moved", () => {
+    async function crashed(advanceAgain: boolean) {
+      const { root, state } = await setup();
+      const wt = state.worktree ?? "";
+      commitFile(root, "other.txt", "o\n");
+      // What the node persisted before merging, then the fast-forward; the crash hit before hatchStart moved.
+      sh(root, "config", `branch.${state.branch}.hatchStartPending`, sh(root, "rev-parse", "main"));
+      sh(wt, "merge", "--ff-only", "main");
+      if (advanceAgain) commitFile(root, "later.txt", "l\n");
+      return { root, state };
+    }
+
+    it("is not reported as merged while base stays put", async () => {
+      const { root, state } = await crashed(false);
+      const result = await mergeNode.run(makeCtx(root, { state }));
+      expect(result.outcome).toBe("blocked");
+      expect(result.problem).toContain("no commits of its own");
+    });
+
+    it("is not reported as merged when base advanced again", async () => {
+      const { root, state } = await crashed(true);
+      const result = await mergeNode.run(makeCtx(root, { state }));
+      expect(result.outcome).toBe("moved");
+      const checkedCommit = sh(state.worktree ?? "", "rev-parse", "HEAD");
+      const again = await mergeNode.run(makeCtx(root, { state: { ...state, checkedCommit } }));
+      expect(again.outcome).toBe("blocked");
+    });
+  });
+
   it("returns conflict and leaves the worktree clean", async () => {
     const { root, state } = await setup();
     const wt = state.worktree ?? "";
