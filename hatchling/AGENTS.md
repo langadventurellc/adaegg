@@ -8,8 +8,8 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `src/daemon/`: the daemon (`daemon.ts`) and its entry point (`main.ts`).
 - `src/supervisor/`: the supervisor behind `hatch start` (restart after a self-change, rollback, crash bound).
 - `src/cli/`: the `hatch` CLI.
-- `workflows/`: workflow YAML files, loaded at daemon start (`implement.yaml` is the shipped one).
-- `prompts/`: the role prompts the agent nodes send (`implement.md`, `review.md`).
+- `workflows/`: workflow YAML files, loaded at daemon start (`implement.yaml`, `request.yaml` and `verify.yaml` are the shipped ones).
+- `prompts/`: the role prompts the agent nodes send (`implement.md`, `review.md`, `plan.md`, `verify.md`).
 - `src/ui/`: the browser UI (a placeholder for now).
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
 - `docs/system/`: how the system works; start with `queue.md` and `workflows.md`; `agents.md` covers the agent nodes; `restart-and-rollback.md` covers restarts and rollbacks. `docs/guides/add-a-node.md` explains how to add a node type.
@@ -23,7 +23,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 ## The `hatch` CLI
 
 ```
-hatch add "<title>" [--file <path>] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
+hatch add "<title>" [--file <path>] [--kind item|request] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
 hatch list [--status <s>] [--json]
 hatch show <id> [--json]   # also lists the item's runs and node runs
 hatch runs [--limit n]     # newest runs first (default 20)
@@ -33,7 +33,7 @@ hatch status           # count per status, then `daemon  up (pid n)` or `daemon 
 hatch start            # run the daemon under the supervisor (also `npm start`)
 ```
 
-`add` reads the contents from `--file`, else from stdin when it is piped. Ids may be a prefix of at least 4 characters. `hatch add` is how you chain requests: queue follow-up work with `hatch add "title" --blocked-by <id>` and it waits until that item is done.
+`add` reads the contents from `--file`, else from stdin when it is piped. Ids may be a prefix of at least 4 characters. `hatch add` is how you chain requests: queue follow-up work with `hatch add "title" --blocked-by <id>` and it waits until that item is done. An `item` (the default) is a ready-made spec that is implemented as written. A `request` is a larger or vaguer ask that the daemon plans into a chain of items (and a verification) before anything is built.
 
 ## The daemon
 
@@ -51,7 +51,7 @@ The daemon loads `workflows/`, resumes interrupted runs, then claims queued item
 
 ## Changing prompts and workflows
 
-- To change how an agent behaves, edit its prompt in `prompts/` (`implement.md`, `review.md`). The review prompt must keep ending in the verdict JSON `{ "verdict": "approve" | "changes", "findings": [] }`.
+- To change how an agent behaves, edit its prompt in `prompts/` (`implement.md`, `review.md`). The review prompt must keep ending in the verdict JSON `{ "verdict": "approve" | "changes", "findings": [] }`. `plan.md` and `verify.md` must keep ending in the plan JSON `{ "summary": "...", "items": [{ "key", "title", "contents", "dependsOn" }] }`, and the `plan` node of `request.yaml` and the `verify` node of `verify.yaml` must stay read-only (`cwd: root`, no write tools, only read-only git and `ls` bash patterns): `src/engine/workflows/request.test.ts` checks it, because the merge node refuses a dirty main checkout.
 - To change the cycle, edit `workflows/implement.yaml`. The loader refuses to start the daemon if an outcome of a node has no edge or a node config is invalid (for example `output: verdict` on an `agent` node; use `review`). It does not detect cycles: keeping every loop bounded by an edge with `max` is a convention, and `src/engine/workflows/implement.test.ts` verifies it for the shipped file. Update the edge table in `docs/system/workflows.md` with it.
 - Models are `models.implement` and `models.review` in `adaegg.json`.
 - Chaining work is `bin/hatch add "<title>" --blocked-by <id>`: the new item waits until that one is done.

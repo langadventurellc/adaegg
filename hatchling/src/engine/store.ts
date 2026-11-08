@@ -11,6 +11,7 @@ export type WorkItem = {
   status: Status;
   priority: number;
   parentId: string | null;
+  sourceId: string | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -25,6 +26,7 @@ export type NewWorkItem = {
   kind?: string;
   priority?: number;
   parentId?: string;
+  sourceId?: string;
   blockedBy?: string[];
 };
 
@@ -39,6 +41,7 @@ function toItem(row: Row): WorkItem {
     status: row.status as Status,
     priority: row.priority as number,
     parentId: (row.parent_id as string | null) ?? null,
+    sourceId: (row.source_id as string | null) ?? null,
     error: (row.error as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -82,6 +85,7 @@ export function addWorkItem(db: DatabaseSync, input: NewWorkItem): WorkItem {
   return inTransaction(db, () => {
     const id = randomUUID();
     const parentId = input.parentId === undefined ? null : getWorkItem(db, input.parentId).id;
+    const sourceId = input.sourceId === undefined ? null : getWorkItem(db, input.sourceId).id;
     const blockers = new Set<string>();
     for (const ref of input.blockedBy ?? []) {
       let blocker: WorkItem;
@@ -102,13 +106,28 @@ export function addWorkItem(db: DatabaseSync, input: NewWorkItem): WorkItem {
     }
     const now = new Date().toISOString();
     db.prepare(
-      `INSERT INTO work_items (id, title, contents, kind, priority, parent_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, input.title, input.contents ?? "", input.kind ?? "item", input.priority ?? 0, parentId, now, now);
+      `INSERT INTO work_items (id, title, contents, kind, priority, parent_id, source_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      input.title,
+      input.contents ?? "",
+      input.kind ?? "item",
+      input.priority ?? 0,
+      parentId,
+      sourceId,
+      now,
+      now,
+    );
     const insertBlock = db.prepare("INSERT INTO work_item_blocks (item_id, blocked_by_id) VALUES (?, ?)");
     for (const blockerId of blockers) insertBlock.run(id, blockerId);
     return getWorkItem(db, id);
   });
+}
+
+// True when some item was created by the item with this exact id.
+export function hasItemsFromSource(db: DatabaseSync, id: string): boolean {
+  return db.prepare("SELECT 1 FROM work_items WHERE source_id = ? LIMIT 1").get(id) !== undefined;
 }
 
 export function listWorkItems(db: DatabaseSync, filter: { status?: Status } = {}): ListedWorkItem[] {

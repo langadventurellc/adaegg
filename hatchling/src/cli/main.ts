@@ -32,9 +32,10 @@ const STATUSES: Status[] = ["queued", "in_progress", "done", "failed", "cancelle
 const HELP = `Usage: hatch <command> [options]
 
 Commands:
-  add "<title>" [--file <path>] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
+  add "<title>" [--file <path>] [--kind item|request] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
                         Queue a work item. Contents come from --file, else stdin
-                        when it is not a terminal.
+                        when it is not a terminal. A request is planned into a
+                        chain of items by the daemon.
   list [--status <s>] [--json]
                         List work items. Statuses: ${STATUSES.join(", ")}.
   show <id> [--json]    Show one work item with its contents, blockers, runs
@@ -154,9 +155,13 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
         "blocked-by": { type: "string", multiple: true },
         parent: { type: "string" },
         priority: { type: "string" },
+        kind: { type: "string" },
       });
       if (values.help) return void out(HELP);
       const title = requireOne(positionals, "title");
+      if (values.kind !== undefined && values.kind !== "item" && values.kind !== "request")
+        throw new UsageError(`--kind must be item or request, got ${values.kind}`);
+      const kind = values.kind;
       let priority: number | undefined;
       if (values.priority !== undefined) {
         if (!/^-?\d+$/.test(values.priority))
@@ -179,6 +184,7 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
           title,
           contents,
           ...(priority === undefined ? {} : { priority }),
+          ...(kind === undefined ? {} : { kind }),
           ...(values.parent === undefined ? {} : { parentId: values.parent }),
           ...(values["blocked-by"] === undefined ? {} : { blockedBy: values["blocked-by"] }),
         });

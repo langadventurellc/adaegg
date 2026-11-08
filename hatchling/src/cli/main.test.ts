@@ -112,6 +112,26 @@ describe("add", () => {
     const c = await add(["C", "--blocked-by", a, "--blocked-by", b]);
     expect(JSON.parse((await hatch(["show", c, "--json"])).out).blockedBy).toHaveLength(2);
   });
+
+  it("stores kind item by default", async () => {
+    const id = await add(["A"]);
+    expect(JSON.parse((await hatch(["show", id, "--json"])).out).kind).toBe("item");
+  });
+
+  it.each(["item", "request"])("stores --kind %s", async (kind) => {
+    const id = await add(["A", "--kind", kind]);
+    expect(JSON.parse((await hatch(["show", id, "--json"])).out).kind).toBe(kind);
+  });
+
+  it.each(["verify", "nonsense"])("rejects --kind %s", async (kind) => {
+    expectOneLineError(await hatch(["add", "A", "--kind", kind]), /--kind must be item or request/);
+  });
+
+  it("rejects --kind without a value", async () => {
+    const r = await hatch(["add", "A", "--kind"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/kind/);
+  });
 });
 
 describe("list, show, cancel, retry, status", () => {

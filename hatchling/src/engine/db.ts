@@ -49,6 +49,8 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX runs_status ON runs (status);
   CREATE INDEX node_runs_run ON node_runs (run_id);`,
+  `ALTER TABLE work_items ADD COLUMN source_id TEXT REFERENCES work_items(id);
+  CREATE INDEX work_items_source ON work_items (source_id);`,
 ];
 
 export function openDb(path: string): DatabaseSync {

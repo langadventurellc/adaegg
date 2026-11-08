@@ -1,0 +1,23 @@
+id: verify
+name: Verify
+trigger: { type: queue, kind: verify }
+start: verify
+nodes:
+  - id: verify
+    type: agent
+    config:
+      cwd: root
+      output: plan
+      model: review
+      prompt: prompts/verify.md
+      tools: [Read, Glob, Grep]
+      bash: ["git log*", "git show*", "git diff*", "git status*", "ls *"]
+      maxTurns: 60
+      maxBudgetUsd: 3
+  - { id: enqueue, type: enqueue }
+edges:
+  - { from: verify, on: done, to: enqueue }
+  - { from: verify, on: failed, to: fail }
+  - { from: verify, on: blocked, to: fail }
+  - { from: enqueue, on: queued, to: end }
+  - { from: enqueue, on: failed, to: fail }

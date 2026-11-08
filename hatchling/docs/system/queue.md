@@ -13,10 +13,19 @@ The queue lives in SQLite (`src/engine/db.ts`, `src/engine/store.ts`). The `hatc
 | `status` | see below |
 | `priority` | integer, default 0; higher is claimed first |
 | `parent_id` | optional parent item |
+| `source_id` | the item that created this one; used by `enqueue` to find its own earlier items |
 | `error` | failure message, set by `failWorkItem`, cleared by retry |
 | `created_at`, `updated_at`, `finished_at` | ISO timestamps; `finished_at` is set on done, failed and cancelled |
 
 Blockers are rows in `work_item_blocks(item_id, blocked_by_id)`.
+
+## Kinds
+
+- `item`: built by the `implement` workflow.
+- `request`: planned into a chain of `item`s.
+- `verify`: checks that a request was delivered.
+
+The `parent_id` of planned items and of their verification is the root request.
 
 ## Statuses and transitions
 

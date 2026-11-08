@@ -61,6 +61,7 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 | `mergeCommit` | the merge commit on base |
 | `changedPaths` | files the merge changed; drives restarts (see the `merge` node below) |
 | `problem` | the latest problem |
+| `plan` | the planner's validated plan; null until a plan node sets it |
 
 ## The shipped `implement` workflow
 
@@ -86,6 +87,32 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 
 Every loop goes through an edge with a `max`, so a run cannot cycle forever; the third time checks fail the run fails with `loop checks:failed exceeded its limit of 2`. When `implement` runs again it is shown what sent it back (`checkOutput`, `findings` or `conflictFiles`). `implement` has `commit: true`, so its work is committed and an empty branch fails. `blocked` from an agent (not signed in) fails the run; fix the cause and `hatch retry` the item.
 
+## The shipped `request` and `verify` workflows
+
+`workflows/request.yaml` (trigger kind `request`, start `plan`) plans a request: the read-only `plan` node (an `agent` with `cwd: root` and `output: plan`, prompt `prompts/plan.md`) reads the main checkout and answers with a plan, then `enqueue` creates the chain of `item`s and, for two or more items, a verification. `workflows/verify.yaml` (trigger kind `verify`, start `verify`) runs the same shape with the `verify` node (prompt `prompts/verify.md`, model `review`): the verifier reads the code on the base branch and its plan holds only the missing work. An empty plan ends the request; otherwise `enqueue` queues the missing items and the next verification. There are at most `maxVerifyRounds` rounds (default 2); after that the verify item fails visibly with the items the verifier wanted. Neither workflow has a loop, so no edge has a `max`.
+
+`request`:
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `plan` | `done` | `enqueue` | |
+| `plan` | `failed` | `fail` | |
+| `plan` | `blocked` | `fail` | |
+| `enqueue` | `queued` | `end` | |
+| `enqueue` | `failed` | `fail` | |
+
+`verify`:
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `verify` | `done` | `enqueue` | |
+| `verify` | `failed` | `fail` | |
+| `verify` | `blocked` | `fail` | |
+| `enqueue` | `queued` | `end` | |
+| `enqueue` | `failed` | `fail` | |
+
+The planner and verifier must not write to the main checkout, because the `merge` node refuses a dirty one: they have only `Read`, `Glob`, `Grep` and read-only `git`/`ls` bash patterns, and `src/engine/workflows/request.test.ts` checks it. A failed item leaves the items blocked by it queued; `hatch retry` is the human step.
+
 ## Idempotent resume
 
 The runner writes `current_node` before the node runs. If the process stops (a crash, or SIGINT/SIGTERM, which abort the signal the nodes get), the run stays `running` and the next daemon start resumes it at `current_node`, so that node runs again. Every node must therefore be safe to run twice. A node whose work was cut short by an abort leaves no `node_runs` row.
@@ -101,3 +128,16 @@ The runner writes `current_node` before the node runs. If the process stops (a c
   - If base has commits the branch lacks, it merges base into the branch in the worktree first. On conflict it aborts the merge, puts the files in `state.conflictFiles` and returns `conflict`. On a clean merge it returns `moved`, so the workflow re-runs the checks. Base is brought in first so the checks run on exactly what will land on base, and conflicts are resolved in the worktree, never in the main checkout. Before merging base in, the node writes `branch.<name>.hatchMovedFrom` (the old tip). If a crash lost the `moved` outcome, the next run sees a tip that differs from it and, unless `state.checkedCommit` is that tip, returns `moved` again, so the combined commit is always checked before it lands.
   - Otherwise it runs `git merge --no-ff -m "hatch: <title> (<id8>)" <branch>` in the main checkout. A failure aborts the merge and returns `blocked`. On success it sets `mergeCommit` and `changedPaths` and returns `merged`.
   - `changedPaths` drives restarts: when a run succeeds and its merge touched `src/`, `workflows/`, `prompts/`, `bin/`, `package.json`, `package-lock.json` or `adaegg.json`, the daemon writes `<state>/restart.json`, stops claiming, waits for other runs and exits 75. See `restart-and-rollback.md`.
+
+## Planning nodes
+
+- **`enqueue`** (`queued`, `failed`; config `maxVerifyRounds`, a positive integer, default 2): turns `state.plan` into a chain of work items. The whole node runs in one transaction, so a failure leaves nothing behind. In order:
+  1. The root request is the work item itself when its kind is `request`, or its `parent_id` when it is `verify`. Any other kind, or a `verify` item without a parent, returns `failed`.
+  2. If some item already has this item as its `source_id`, it returns `queued` and creates nothing: the node was re-run after a crash.
+  3. A missing plan returns `failed`. An empty plan on a `request` returns `failed` (`the planner found nothing to build: <summary>`); on a `verify` item it returns `queued` and creates nothing, because the request is satisfied.
+  4. The round is the number of `verify` items under the root, plus 1. This is checked before anything is created.
+  5. Each plan item becomes an `item` under the root with this item as `source_id`, the same priority, `blockedBy` the items its `dependsOn` keys name, and contents that start with `Part of the request <id8> "<title>".`.
+  6. A verification item (kind `verify`, parent the root, blocked by every item just created) is queued when this item is a `request` with at least 2 plan items, or a `verify` item with at least 1. A request with exactly 1 plan item gets none. Its contents hold the request, the numbered plan items and the round.
+- **The round limit**: if a verification would be queued and the round exceeds `maxVerifyRounds`, the node returns `failed` naming the limit and the titles the verifier wanted, and creates nothing. A request must not loop between building and verifying forever; a person looks at it with `hatch show` and decides.
+- **Why a node and not the planner running `hatch add`**: the chain is created atomically, validated by the plan schema, and is safe to re-run after a crash.
+- A failed item leaves the items blocked by it queued, as for any blocker; `hatch retry` is the human step.
