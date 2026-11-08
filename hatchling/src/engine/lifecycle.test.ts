@@ -1,10 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  consumingPath,
   deleteReady,
   deleteRestartRequest,
+  deleteRestartRequestIfUnchanged,
   isPidAlive,
   RESTART_EXIT_CODE,
   readReady,
@@ -88,6 +90,79 @@ describe("files", () => {
     deleteReady(stateDir);
     deleteReady(stateDir);
     expect(readReady(stateDir)).toBeNull();
+  });
+});
+
+describe("deleteRestartRequestIfUnchanged", () => {
+  const make = (mergeCommit: string) => ({
+    mergeCommit,
+    workItemId: "id",
+    preMergeHead: "def",
+    requestedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const older = make("old");
+  const newer = make("new");
+
+  it("consumes the same request", () => {
+    writeRestartRequest(stateDir, older);
+    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(true);
+    expect(existsSync(restartPath(stateDir))).toBe(false);
+    expect(existsSync(consumingPath(stateDir))).toBe(false);
+  });
+
+  it("returns true and creates nothing when there is no request", () => {
+    mkdirSync(stateDir, { recursive: true });
+    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(true);
+    expect(readdirSync(stateDir)).toEqual([]);
+  });
+
+  it("keeps a different request already on disk", () => {
+    writeRestartRequest(stateDir, newer);
+    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(false);
+    expect(readRestartRequest(stateDir)).toEqual(newer);
+    expect(existsSync(consumingPath(stateDir))).toBe(false);
+  });
+
+  it("keeps a request written between the take and the decision", () => {
+    writeRestartRequest(stateDir, older);
+    const result = deleteRestartRequestIfUnchanged(stateDir, older, {
+      afterTake: () => writeRestartRequest(stateDir, newer),
+    });
+    expect(result).toBe(true);
+    expect(readRestartRequest(stateDir)).toEqual(newer);
+    expect(existsSync(consumingPath(stateDir))).toBe(false);
+  });
+
+  it("does not overwrite a request written in the gap when the taken one differs", () => {
+    const other = make("other");
+    writeRestartRequest(stateDir, other);
+    const result = deleteRestartRequestIfUnchanged(stateDir, older, {
+      afterTake: () => writeRestartRequest(stateDir, newer),
+    });
+    expect(result).toBe(false);
+    expect(readRestartRequest(stateDir)).toEqual(newer);
+    expect(existsSync(consumingPath(stateDir))).toBe(false);
+  });
+
+  it("restores a differing taken request when nothing was written in the gap", () => {
+    writeRestartRequest(stateDir, newer);
+    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(false);
+    expect(readRestartRequest(stateDir)).toEqual(newer);
+  });
+
+  it("leaves a normal restart.json for a write after the call", () => {
+    writeRestartRequest(stateDir, older);
+    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(true);
+    writeRestartRequest(stateDir, newer);
+    expect(readRestartRequest(stateDir)).toEqual(newer);
+  });
+
+  it("restores invalid JSON byte for byte", () => {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(restartPath(stateDir), "{nope");
+    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(false);
+    expect(readFileSync(restartPath(stateDir), "utf8")).toBe("{nope");
+    expect(existsSync(consumingPath(stateDir))).toBe(false);
   });
 });
 
