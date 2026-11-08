@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { type Config, ConfigSchema } from "../config.ts";
+import { openDb } from "../db.ts";
 import type { WorkItem } from "../store.ts";
 import { type NodeContext, type RunState, RunStateSchema } from "./types.ts";
 
@@ -56,6 +58,7 @@ export function makeWorkItem(over: Partial<WorkItem> = {}): WorkItem {
     status: "in_progress",
     priority: 0,
     parentId: null,
+    sourceId: null,
     error: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -71,6 +74,7 @@ export function makeCtx(
     state?: Partial<RunState>;
     workItem?: Partial<WorkItem>;
     signal?: AbortSignal;
+    db?: DatabaseSync;
   } = {},
 ): NodeContext<Record<string, never>> {
   return {
@@ -80,6 +84,7 @@ export function makeCtx(
     attempt: 1,
     state: RunStateSchema.parse(opts.state ?? {}),
     config: {},
+    db: opts.db ?? openDb(":memory:"),
     paths: { root, stateDir: join(root, ".adaegg") },
     appConfig: ConfigSchema.parse({ schema: 1, setup: "", checks: "true", ...opts.config }),
     signal: opts.signal ?? new AbortController().signal,

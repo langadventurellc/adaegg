@@ -69,6 +69,7 @@ describe("runner", () => {
         tokens: { input: 5, output: 7 },
       })),
       b: fake(["ok"], (ctx) => {
+        expect(ctx.db).toBe(db);
         expect((ctx.state as { branch: string }).branch).toBe("br");
         return { outcome: "ok", state: { mergeCommit: "abc" } };
       }),

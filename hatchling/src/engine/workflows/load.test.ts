@@ -191,6 +191,7 @@ describe("RunStateSchema", () => {
       mergeCommit: null,
       changedPaths: [],
       problem: null,
+      plan: null,
     });
   });
 });

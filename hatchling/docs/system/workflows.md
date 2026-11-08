@@ -61,6 +61,7 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 | `mergeCommit` | the merge commit on base |
 | `changedPaths` | files the merge changed; drives restarts (see the `merge` node below) |
 | `problem` | the latest problem |
+| `plan` | the planner's validated plan; null until a plan node sets it |
 
 ## The shipped `implement` workflow
 
