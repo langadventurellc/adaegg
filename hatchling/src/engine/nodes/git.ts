@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 export class GitError extends Error {
   stderr: string;
@@ -47,6 +47,7 @@ export function branchExists(cwd: string, branch: string): boolean {
   }
 }
 
+// True when `a` is `b` or reachable from it.
 export function isAncestor(cwd: string, a: string, b: string): boolean {
   try {
     git(cwd, "merge-base", "--is-ancestor", a, b);
@@ -67,11 +68,32 @@ export function currentBranch(dir: string): string {
   return git(dir, "rev-parse", "--abbrev-ref", "HEAD");
 }
 
-// Runs a command through the shell and returns combined stdout+stderr.
-export function shellSync(cwd: string, command: string): { ok: boolean; output: string } {
-  const r = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  const output = `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? String(r.error) : ""}`;
-  return { ok: r.status === 0 && !r.error, output };
+// Per-branch values kept in the repo's git config, so they outlive a run and
+// are shared with the item's worktree.
+export function getBranchConfig(cwd: string, branch: string, key: string): string | null {
+  try {
+    return git(cwd, "config", "--get", `branch.${branch}.${key}`);
+  } catch {
+    return null;
+  }
+}
+
+export function setBranchConfig(cwd: string, branch: string, key: string, value: string | null): void {
+  if (value === null) {
+    try {
+      git(cwd, "config", "--unset", `branch.${branch}.${key}`);
+    } catch {
+      // not set
+    }
+    return;
+  }
+  git(cwd, "config", `branch.${branch}.${key}`, value);
+}
+
+// The commit the branch started from (or was last fast-forwarded to while it
+// had no commits of its own). A branch whose tip equals it has no work yet.
+export function branchStart(cwd: string, branch: string, base: string): string {
+  return getBranchConfig(cwd, branch, "hatchStart") ?? git(cwd, "merge-base", branch, base);
 }
 
 export type ShellResult = { ok: boolean; output: string; timedOut: boolean };

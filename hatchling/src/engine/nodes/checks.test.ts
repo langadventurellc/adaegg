@@ -1,11 +1,13 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { checksNode } from "./checks.ts";
-import { buildTemplateRepo, copyRepo, makeCtx } from "./test-repo.ts";
+import { buildTemplateRepo, copyRepo, makeCtx, removeAllRepos, removeCopies, sh } from "./test-repo.ts";
 
 let template: string;
 beforeAll(() => {
   template = buildTemplateRepo();
 });
+afterEach(removeCopies);
+afterAll(removeAllRepos);
 
 function ctxWith(checks: string, extra: { checksTimeoutMinutes?: number; checkOutput?: string } = {}) {
   const root = copyRepo(template);
@@ -20,6 +22,14 @@ describe("checks node", () => {
     const result = await checksNode.run(ctxWith("true", { checkOutput: "old" }));
     expect(result.outcome).toBe("passed");
     expect(result.state?.checkOutput).toBe("");
+  });
+
+  it("records the commit it passed on, and clears it on failure", async () => {
+    const ctx = ctxWith("true");
+    const passed = await checksNode.run(ctx);
+    expect(passed.state?.checkedCommit).toBe(sh(ctx.state.worktree ?? "", "rev-parse", "HEAD"));
+    const failed = await checksNode.run(ctxWith("exit 1"));
+    expect(failed.state?.checkedCommit).toBeNull();
   });
 
   it("sets CI=1", async () => {

@@ -162,7 +162,7 @@ describe("list, show, cancel, retry, status", () => {
   });
 });
 
-// Records a finished run with two node runs for the item, straight in the database.
+// Records a running run (at `checks`) with two finished node runs for the item, straight in the database.
 function seedRun(itemShort: string, runId: string, startedAt: string) {
   const db = openDb(join(state, "hatch.db"));
   const itemId = (db.prepare("SELECT id FROM work_items WHERE id LIKE ?").get(`${itemShort}%`) as { id: string }).id;

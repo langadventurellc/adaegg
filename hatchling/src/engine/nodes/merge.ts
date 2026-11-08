@@ -1,19 +1,54 @@
 import { z } from "zod";
-import { currentBranch, GitError, git, isClean } from "./git.ts";
+import {
+  branchStart,
+  currentBranch,
+  GitError,
+  getBranchConfig,
+  git,
+  isAncestor,
+  isClean,
+  setBranchConfig,
+} from "./git.ts";
 import { defineNode } from "./types.ts";
 
-// Rule for "already merged": every commit of the branch is on base
-// (`base..branch` is empty) AND a merge commit on base's first-parent history
-// has the branch tip as its second parent. A branch that never got commits of
-// its own has no such merge commit, so it is not mistaken for merged.
-function findMergeCommit(root: string, base: string, tip: string): string | null {
-  if (Number(git(root, "rev-list", "--count", `${base}..${tip}`)) !== 0) return null;
-  const log = git(root, "log", "--merges", "--first-parent", "--format=%H %P", base);
-  for (const line of log.split("\n")) {
-    const [hash, , second] = line.split(" ");
-    if (hash && second === tip) return hash;
+function lines(text: string): string[] {
+  return text.split("\n").filter((f) => f !== "");
+}
+
+// The commit on base's first-parent history that first contains `tip`: `tip`
+// itself when base fast-forwarded to it, else the merge commit (of this or of
+// another branch) that brought it in. Containment only grows along the chain,
+// so walking from base back stops at the first commit that lacks `tip`.
+function incorporatingCommit(root: string, base: string, tip: string): string {
+  let found = tip;
+  for (const commit of lines(git(root, "rev-list", "--first-parent", base))) {
+    if (commit === tip) return tip;
+    if (!isAncestor(root, tip, commit)) break;
+    found = commit;
   }
-  return null;
+  return found;
+}
+
+// "Already merged": the branch has commits of its own (its tip is not where it
+// started) and every one of them is on base. How they got there does not matter.
+function findMergeCommit(
+  root: string,
+  base: string,
+  branch: string,
+  tip: string,
+): { mergeCommit: string; changedPaths: string[] } | null {
+  if (!isAncestor(root, tip, base)) return null;
+  const start = git(root, "rev-parse", branchStart(root, branch, base));
+  if (tip === start) return null;
+  const mergeCommit = incorporatingCommit(root, base, tip);
+  const parents = git(root, "rev-list", "--parents", "-n", "1", mergeCommit).split(" ");
+  const own = parents.length === 3 && parents[2] === tip;
+  const changedPaths = lines(
+    own
+      ? git(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit)
+      : git(root, "diff", "--name-only", start, tip),
+  );
+  return { mergeCommit, changedPaths };
 }
 
 export const mergeNode = defineNode({
@@ -29,8 +64,8 @@ export const mergeNode = defineNode({
     const id8 = ctx.workItem.id.slice(0, 8);
 
     const tip = git(root, "rev-parse", branch);
-    const done = findMergeCommit(root, base, tip);
-    if (done) return { outcome: "merged", state: { mergeCommit: done, conflictFiles: [] } };
+    const done = findMergeCommit(root, base, branch, tip);
+    if (done) return { outcome: "merged", state: { ...done, conflictFiles: [] } };
 
     const current = currentBranch(root);
     if (current !== base) {
@@ -48,19 +83,30 @@ export const mergeNode = defineNode({
 
     // Bring base into the branch first, so the checks run on what will land.
     if (Number(git(root, "rev-list", "--count", `${branch}..${base}`)) > 0) {
+      // Written before the merge, so a crash right after it is still noticed.
+      setBranchConfig(root, branch, "hatchMovedFrom", tip);
+      const start = git(root, "rev-parse", branchStart(root, branch, base));
       try {
         git(worktree, "merge", "--no-edit", base);
       } catch {
-        const conflictFiles = git(worktree, "diff", "--name-only", "--diff-filter=U")
-          .split("\n")
-          .filter((f) => f !== "");
+        const conflictFiles = lines(git(worktree, "diff", "--name-only", "--diff-filter=U"));
         try {
           git(worktree, "merge", "--abort");
         } catch {
           // nothing to abort
         }
+        setBranchConfig(root, branch, "hatchMovedFrom", null);
         return { outcome: "conflict", problem: `merge of ${base} conflicts`, state: { conflictFiles } };
       }
+      // A branch without commits of its own just fast-forwarded; it still has none.
+      if (tip === start) setBranchConfig(root, branch, "hatchStart", git(worktree, "rev-parse", "HEAD"));
+      return { outcome: "moved", state: { conflictFiles: [] } };
+    }
+
+    // Base was merged into the branch earlier (possibly just before a crash):
+    // the checks must have passed on that combined tip before it lands.
+    const movedFrom = getBranchConfig(root, branch, "hatchMovedFrom");
+    if (movedFrom !== null && movedFrom !== tip && ctx.state.checkedCommit !== tip) {
       return { outcome: "moved", state: { conflictFiles: [] } };
     }
 
@@ -80,9 +126,7 @@ export const mergeNode = defineNode({
     if (mergeCommit === before) {
       return { outcome: "blocked", problem: `${branch} has no commits of its own to merge` };
     }
-    const changedPaths = git(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit)
-      .split("\n")
-      .filter((f) => f !== "");
+    const changedPaths = lines(git(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit));
     return { outcome: "merged", state: { mergeCommit, changedPaths, conflictFiles: [] } };
   },
 });

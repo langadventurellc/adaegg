@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -45,12 +45,15 @@ async function waitFor(check: () => boolean) {
 
 let db: DatabaseSync;
 let daemons: Daemon[];
+const tempDirs: string[] = [];
 beforeEach(() => {
   db = openDb(":memory:");
   daemons = [];
 });
 afterEach(async () => {
   for (const d of daemons) await d.stop();
+  db.close();
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 function make(workflow: Workflow, nodes: Record<string, ReturnType<typeof fake>>, maxConcurrentRuns = 1) {
@@ -166,6 +169,7 @@ describe("daemon", () => {
 
   it("refuses to start on an invalid workflow directory, naming every problem", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "adaegg-daemon-")));
+    tempDirs.push(root);
     mkdirSync(join(root, "workflows"));
     writeFileSync(join(root, "workflows", "bad.yaml"), "id: x\n");
     writeFileSync(join(root, "workflows", "worse.yaml"), "id: [\n");

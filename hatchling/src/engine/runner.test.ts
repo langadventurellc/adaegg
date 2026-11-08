@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ConfigSchema } from "./config.ts";
 import { openDb } from "./db.ts";
@@ -12,6 +12,9 @@ import type { Workflow } from "./workflows/schema.ts";
 let db: DatabaseSync;
 beforeEach(() => {
   db = openDb(":memory:");
+});
+afterEach(() => {
+  db.close();
 });
 
 type Fn = (ctx: NodeContext<unknown>) => Promise<NodeResult> | NodeResult;

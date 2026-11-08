@@ -14,6 +14,8 @@ nodes:
   - { id: checks, type: checks }
 edges:
   - { from: branch, on: ok, to: checks }
+  - { from: branch, on: fail, to: fail }
+  - { from: checks, on: passed, to: end }
   - { from: checks, on: failed, to: branch, max: 2 }   # max bounds how often this edge may be taken in one run
 ```
 
@@ -53,6 +55,7 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 | `worktree` | path of the item's worktree |
 | `edgeCounts` | times each edge was taken, keyed `from:on` |
 | `checkOutput` | tail of the failing checks output (cleared on pass) |
+| `checkedCommit` | the branch tip the last passing checks ran on (null after a failure) |
 | `findings` | review findings, one string each |
 | `conflictFiles` | files that conflicted when merging base |
 | `mergeCommit` | the merge commit on base |
@@ -65,10 +68,10 @@ The runner writes `current_node` before the node runs. If the process stops (a c
 
 ## Git nodes
 
-- **`branch`** (`ok`, `fail`): the branch is `hatch/<id8>-<slug of title>` and the worktree `<state dir>/worktrees/<id8>` (`.adaegg/worktrees/<id8>`). If the worktree exists it is reused; if only the branch exists, the worktree is added on it; otherwise both are created from `baseBranch`. That is how a retried item continues earlier work. It then runs `setup` in the worktree (an empty string skips it); a failing setup gives `fail` with the output tail as the problem.
-- **`checks`** (`passed`, `failed`): runs the `checks` command through a shell in the worktree with `CI=1` and the `checksTimeoutMinutes` timeout. It keeps the last 200 lines (at most 20KB) in `state.checkOutput` and clears it on pass.
+- **`branch`** (`ok`, `fail`): the branch is `hatch/<id8>-<slug of title>` and the worktree `<state dir>/worktrees/<id8>` (`.adaegg/worktrees/<id8>`). If the worktree exists it is reused; if only the branch exists, the worktree is added on it; otherwise both are created from `baseBranch`. That is how a retried item continues earlier work. It records the commit the branch started from in git config (`branch.<name>.hatchStart`), which the merge node uses to tell a branch with work from one without. It then runs `setup` in the worktree (an empty string skips it) asynchronously, so a shutdown aborts it; a failing setup gives `fail` with the output tail as the problem.
+- **`checks`** (`passed`, `failed`): runs the `checks` command through a shell in the worktree with `CI=1` and the `checksTimeoutMinutes` timeout. It keeps the last 200 lines (at most 20KB) in `state.checkOutput` and clears it on pass. On pass it records the worktree's HEAD in `state.checkedCommit`.
 - **`merge`** (`merged`, `moved`, `conflict`, `blocked`):
-  - If the branch's commits are all on base and a merge commit of base has the branch as its second parent, it returns `merged` with that `mergeCommit`. This makes a re-run safe.
+  - If the branch is an ancestor of base and has commits of its own (its tip is not the `hatchStart` commit), it returns `merged`, however it got there (merge commit, fast-forward, or through another merged branch). `mergeCommit` is the first commit on base's first-parent history that contains the branch and `changedPaths` is recovered from git, so a re-run after a crash gives the same result.
   - If the main checkout isn't on `baseBranch` or has uncommitted changes (`.adaegg/` ignored), it returns `blocked` with what to clean up. The merge runs in the main checkout, so it must be clean: the merge would otherwise mix the item's work with someone's unfinished edits or fail midway.
-  - If base has commits the branch lacks, it merges base into the branch in the worktree first. On conflict it aborts the merge, puts the files in `state.conflictFiles` and returns `conflict`. On a clean merge it returns `moved`, so the workflow re-runs the checks. Base is brought in first so the checks run on exactly what will land on base, and conflicts are resolved in the worktree, never in the main checkout.
+  - If base has commits the branch lacks, it merges base into the branch in the worktree first. On conflict it aborts the merge, puts the files in `state.conflictFiles` and returns `conflict`. On a clean merge it returns `moved`, so the workflow re-runs the checks. Base is brought in first so the checks run on exactly what will land on base, and conflicts are resolved in the worktree, never in the main checkout. Before merging base in, the node writes `branch.<name>.hatchMovedFrom` (the old tip). If a crash lost the `moved` outcome, the next run sees a tip that differs from it and, unless `state.checkedCommit` is that tip, returns `moved` again, so the combined commit is always checked before it lands.
   - Otherwise it runs `git merge --no-ff -m "hatch: <title> (<id8>)" <branch>` in the main checkout. A failure aborts the merge and returns `blocked`. On success it sets `mergeCommit` and `changedPaths` and returns `merged`.

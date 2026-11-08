@@ -185,6 +185,7 @@ describe("RunStateSchema", () => {
       worktree: null,
       edgeCounts: {},
       checkOutput: "",
+      checkedCommit: null,
       findings: [],
       conflictFiles: [],
       mergeCommit: null,

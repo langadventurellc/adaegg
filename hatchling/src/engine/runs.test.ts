@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "./db.ts";
 import { createRun, getRun, listNodeRuns, listRunningRuns, listRuns, listRunsForItem } from "./runs.ts";
 import { addWorkItem } from "./store.ts";
@@ -17,6 +17,9 @@ const workflow: Workflow = {
 let db: DatabaseSync;
 beforeEach(() => {
   db = openDb(":memory:");
+});
+afterEach(() => {
+  db.close();
 });
 
 describe("run store", () => {

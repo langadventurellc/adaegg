@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Config, ConfigSchema } from "../config.ts";
@@ -10,9 +10,24 @@ export function sh(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+const templates: string[] = [];
+const copies: string[] = [];
+
+// Removes the per-test copies (their worktrees live inside them). Call from afterEach.
+export function removeCopies(): void {
+  for (const dir of copies.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
+// Removes the template repos too. Call from afterAll.
+export function removeAllRepos(): void {
+  removeCopies();
+  for (const dir of templates.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+
 // A real git repo on `main` with one commit; `.adaegg/` is ignored.
 export function buildTemplateRepo(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "adaegg-repo-")));
+  templates.push(dir);
   sh(dir, "init", "-b", "main");
   sh(dir, "config", "user.name", "Test");
   sh(dir, "config", "user.email", "test@example.com");
@@ -27,6 +42,7 @@ export function buildTemplateRepo(): string {
 // Copies the template (including .git) to a fresh temp dir.
 export function copyRepo(template: string): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "adaegg-copy-")));
+  copies.push(dir);
   cpSync(template, dir, { recursive: true });
   return dir;
 }

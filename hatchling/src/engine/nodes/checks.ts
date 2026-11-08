@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { shell, tail } from "./git.ts";
+import { git, shell, tail } from "./git.ts";
 import { defineNode } from "./types.ts";
 
 export const checksNode = defineNode({
@@ -15,13 +15,15 @@ export const checksNode = defineNode({
       timeoutMs: minutes * 60_000,
       signal: ctx.signal,
     });
-    if (result.ok) return { outcome: "passed", state: { checkOutput: "" } };
+    if (result.ok) {
+      return { outcome: "passed", state: { checkOutput: "", checkedCommit: git(worktree, "rev-parse", "HEAD") } };
+    }
     const timeoutLine = result.timedOut ? `checks timed out after ${minutes} minutes` : "";
     const checkOutput = tail(timeoutLine ? `${result.output}\n${timeoutLine}` : result.output);
     return {
       outcome: "failed",
       problem: timeoutLine || "checks failed",
-      state: { checkOutput },
+      state: { checkOutput, checkedCommit: null },
     };
   },
 });

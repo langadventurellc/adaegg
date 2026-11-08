@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ConfigSchema } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
 import { builtinNodeTypes } from "../engine/nodes/index.ts";
-import { buildTemplateRepo, copyRepo, sh } from "../engine/nodes/test-repo.ts";
+import { buildTemplateRepo, copyRepo, removeAllRepos, removeCopies, sh } from "../engine/nodes/test-repo.ts";
 import { defineNode, type NodeContext, type NodeRegistry, type NodeResult } from "../engine/nodes/types.ts";
 import { getRun, listNodeRuns, listRuns } from "../engine/runs.ts";
 import { addWorkItem, getWorkItem } from "../engine/store.ts";
@@ -84,14 +84,17 @@ beforeEach(() => {
 });
 afterEach(async () => {
   for (const d of daemons) await d.stop();
+  db.close();
+  removeCopies();
 });
+afterAll(removeAllRepos);
 
-function makeDaemon(nodeTypes: NodeRegistry): Daemon {
+function makeDaemon(nodeTypes: NodeRegistry, setup = ""): Daemon {
   const daemon = createDaemon({
     db,
     workflows: loadWorkflows(join(root, "workflows"), nodeTypes),
     nodeTypes,
-    appConfig: ConfigSchema.parse({ schema: 1, setup: "", checks: "true" }),
+    appConfig: ConfigSchema.parse({ schema: 1, setup, checks: "true" }),
     paths: { root, stateDir: join(root, ".adaegg") },
     tickMs: 10_000,
   });
@@ -118,6 +121,20 @@ describe("daemon end to end", () => {
       ["checks", "passed"],
       ["merge", "merged"],
     ]);
+  });
+
+  it("stops promptly during a long setup and leaves the run to resume", async () => {
+    const item = addWorkItem(db, { title: "Add the feature" });
+    const daemon = makeDaemon(registry(commitFile), "touch setup-started; sleep 30");
+    await daemon.tick();
+    await waitFor(() => existsSync(join(root, ".adaegg", "worktrees", item.id.slice(0, 8), "setup-started")));
+    const started = Date.now();
+    await daemon.stop();
+    expect(Date.now() - started).toBeLessThan(5000);
+    const [run] = listRuns(db);
+    expect(run?.status).toBe("running");
+    expect(run?.currentNode).toBe("branch");
+    expect(getWorkItem(db, item.id).status).toBe("in_progress");
   });
 
   it("resumes after a restart in the middle of a run and merges", async () => {

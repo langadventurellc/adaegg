@@ -10,6 +10,8 @@ export const RunStateSchema = z.object({
   // How often each edge was taken in this run, keyed `from:on`.
   edgeCounts: z.record(z.string(), z.number()).default({}),
   checkOutput: z.string().default(""),
+  // The branch tip the last passing checks ran on.
+  checkedCommit: z.string().nullable().default(null),
   // Review findings as plain strings, one finding each.
   findings: z.array(z.string()).default([]),
   conflictFiles: z.array(z.string()).default([]),

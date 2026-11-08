@@ -1,15 +1,17 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { branchNode } from "./branch.ts";
 import { mergeNode } from "./merge.ts";
-import { buildTemplateRepo, copyRepo, makeCtx, sh } from "./test-repo.ts";
+import { buildTemplateRepo, copyRepo, makeCtx, removeAllRepos, removeCopies, sh } from "./test-repo.ts";
 import type { RunState } from "./types.ts";
 
 let template: string;
 beforeAll(() => {
   template = buildTemplateRepo();
 });
+afterEach(removeCopies);
+afterAll(removeAllRepos);
 
 async function setup(): Promise<{ root: string; state: Partial<RunState> }> {
   const root = copyRepo(template);
@@ -59,9 +61,71 @@ describe("merge node", () => {
     const moved = await mergeNode.run(makeCtx(root, { state }));
     expect(moved.outcome).toBe("moved");
     expect(existsSync(join(state.worktree ?? "", "other.txt"))).toBe(true);
-    const merged = await mergeNode.run(makeCtx(root, { state }));
+    const checkedCommit = sh(state.worktree ?? "", "rev-parse", "HEAD");
+    const merged = await mergeNode.run(makeCtx(root, { state: { ...state, checkedCommit } }));
     expect(merged.outcome).toBe("merged");
     expect(merged.state?.changedPaths).toEqual(["feature.txt"]);
+  });
+
+  it("after a restart following moved, asks for the checks again before merging", async () => {
+    const { root, state } = await setup();
+    const wt = state.worktree ?? "";
+    commitFile(wt, "feature.txt", "x\n");
+    commitFile(root, "other.txt", "o\n");
+    await mergeNode.run(makeCtx(root, { state }));
+    // The run state was lost with the crash: checkedCommit still names no tip.
+    const stale = await mergeNode.run(makeCtx(root, { state: { ...state, checkedCommit: "0".repeat(40) } }));
+    expect(stale.outcome).toBe("moved");
+    expect(existsSync(join(root, "feature.txt"))).toBe(false);
+    const checkedCommit = sh(wt, "rev-parse", "HEAD");
+    const merged = await mergeNode.run(makeCtx(root, { state: { ...state, checkedCommit } }));
+    expect(merged.outcome).toBe("merged");
+    expect(existsSync(join(root, "feature.txt"))).toBe(true);
+  });
+
+  it("recovers changedPaths when the merge landed before the state was saved", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "a.txt", "a\n");
+    commitFile(state.worktree ?? "", "b.txt", "b\n");
+    const first = await mergeNode.run(makeCtx(root, { state }));
+    const again = await mergeNode.run(makeCtx(root, { state }));
+    expect(again.state?.mergeCommit).toBe(first.state?.mergeCommit);
+    expect([...(again.state?.changedPaths ?? [])].sort()).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("treats a branch fast-forwarded into base as merged", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    sh(root, "merge", "--ff-only", state.branch ?? "");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("merged");
+    expect(result.state?.mergeCommit).toBe(sh(root, "rev-parse", "HEAD"));
+    expect(result.state?.changedPaths).toEqual(["feature.txt"]);
+  });
+
+  it("treats a branch incorporated through another merged branch as merged", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    sh(root, "checkout", "-b", "other", state.branch ?? "");
+    commitFile(root, "extra.txt", "e\n");
+    sh(root, "checkout", "main");
+    commitFile(root, "mainline.txt", "m\n");
+    sh(root, "merge", "--no-ff", "-m", "land other", "other");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("merged");
+    expect(result.state?.mergeCommit).toBe(sh(root, "rev-parse", "HEAD"));
+    expect(result.state?.changedPaths).toEqual(["feature.txt"]);
+  });
+
+  it("does not call an untouched branch merged when base moved on", async () => {
+    const { root, state } = await setup();
+    commitFile(root, "other.txt", "o\n");
+    const moved = await mergeNode.run(makeCtx(root, { state }));
+    expect(moved.outcome).toBe("moved");
+    const checkedCommit = sh(state.worktree ?? "", "rev-parse", "HEAD");
+    const result = await mergeNode.run(makeCtx(root, { state: { ...state, checkedCommit } }));
+    expect(result.outcome).toBe("blocked");
+    expect(result.problem).toContain("no commits of its own");
   });
 
   it("returns conflict and leaves the worktree clean", async () => {
