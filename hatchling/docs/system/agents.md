@@ -24,7 +24,7 @@ As for every node, a workflow needs an edge for each outcome.
 | `output` | `text` (default) or `verdict`. |
 | `commit` | `false` by default. `true` turns on the commit guard (below). |
 
-The prompt sent is `buildPrompt(promptText, workItem, state)`: the role text, the work item's title and contents, then "Check output", "Review findings" and "Merge conflicts" sections for whatever the run state holds (`checkOutput`, `findings`, `conflictFiles`).
+The prompt sent is `buildPrompt(promptText, workItem, state)`: the role text, the work item's title, `Work item id:` and (when the run has one) `Base branch:` lines, and its contents, then "Check output", "Review findings" and "Merge conflicts" sections for whatever the run state holds (`checkOutput`, `findings`, `conflictFiles`).
 
 ## Tools: an allowlist that denies the rest
 

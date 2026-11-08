@@ -50,7 +50,11 @@ const VERDICT_JSON_SCHEMA = {
 
 // The role text, then the work item, then whatever the run state says needs fixing.
 export function buildPrompt(promptText: string, workItem: WorkItem, state: RunState): string {
-  const parts = [promptText.trim(), `# Work item: ${workItem.title}\n\n${workItem.contents}`.trimEnd()];
+  const facts = [`Work item id: ${workItem.id}`, ...(state.base ? [`Base branch: ${state.base}`] : [])];
+  const parts = [
+    promptText.trim(),
+    `# Work item: ${workItem.title}\n\n${facts.join("\n")}\n\n${workItem.contents}`.trimEnd(),
+  ];
   if (state.checkOutput !== "") parts.push(`# Check output\n\n${state.checkOutput}`);
   if (state.findings.length > 0) {
     parts.push(`# Review findings\n\n${state.findings.map((f) => `- ${f}`).join("\n")}`);

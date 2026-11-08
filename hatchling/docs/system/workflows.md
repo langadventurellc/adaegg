@@ -62,6 +62,30 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 | `changedPaths` | files the merge changed |
 | `problem` | the latest problem |
 
+## The shipped `implement` workflow
+
+`workflows/implement.yaml` (trigger `queue`, kind `item`, start `branch`) is the basic implement cycle: branch, an `agent` node that implements, checks, a `review` node, then merge. Its prompts are `prompts/implement.md` and `prompts/review.md`; see `agents.md` for the agent nodes.
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `branch` | `ok` | `implement` | |
+| `branch` | `fail` | `fail` | |
+| `implement` | `done` | `checks` | |
+| `implement` | `failed` | `fail` | |
+| `implement` | `blocked` | `fail` | |
+| `checks` | `passed` | `review` | |
+| `checks` | `failed` | `implement` | `max: 2` |
+| `review` | `approve` | `merge` | |
+| `review` | `changes` | `implement` | `max: 2` |
+| `review` | `failed` | `fail` | |
+| `review` | `blocked` | `fail` | |
+| `merge` | `merged` | `end` | |
+| `merge` | `moved` | `checks` | `max: 2` |
+| `merge` | `conflict` | `implement` | `max: 2` |
+| `merge` | `blocked` | `fail` | |
+
+Every loop goes through an edge with a `max`, so a run cannot cycle forever; the third time checks fail the run fails with `loop checks:failed exceeded its limit of 2`. When `implement` runs again it is shown what sent it back (`checkOutput`, `findings` or `conflictFiles`). `implement` has `commit: true`, so its work is committed and an empty branch fails. `blocked` from an agent (not signed in) fails the run; fix the cause and `hatch retry` the item.
+
 ## Idempotent resume
 
 The runner writes `current_node` before the node runs. If the process stops (a crash, or SIGINT/SIGTERM, which abort the signal the nodes get), the run stays `running` and the next daemon start resumes it at `current_node`, so that node runs again. Every node must therefore be safe to run twice. A node whose work was cut short by an abort leaves no `node_runs` row.
