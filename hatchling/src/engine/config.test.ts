@@ -17,7 +17,37 @@ afterAll(() => {
 describe("loadConfig", () => {
   it("parses a valid file", () => {
     writeFileSync(join(dir, "adaegg.json"), '{ "schema": 1 }');
-    expect(loadConfig(dir)).toEqual({ schema: 1 });
+    expect(loadConfig(dir)).toEqual({
+      schema: 1,
+      baseBranch: "main",
+      checks: "npm run check",
+      setup: "npm ci",
+      checksTimeoutMinutes: 20,
+      maxConcurrentRuns: 1,
+    });
+  });
+
+  it("accepts overrides, including an empty setup", () => {
+    writeFileSync(
+      join(dir, "adaegg.json"),
+      '{ "schema": 1, "baseBranch": "trunk", "setup": "", "maxConcurrentRuns": 3, "checksTimeoutMinutes": 5 }',
+    );
+    const config = loadConfig(dir);
+    expect(config.baseBranch).toBe("trunk");
+    expect(config.setup).toBe("");
+    expect(config.maxConcurrentRuns).toBe(3);
+    expect(config.checksTimeoutMinutes).toBe(5);
+  });
+
+  it.each([
+    ['"maxConcurrentRuns": 0', "maxConcurrentRuns"],
+    ['"checksTimeoutMinutes": -1.5', "checksTimeoutMinutes"],
+    ['"checksTimeoutMinutes": -1', "checksTimeoutMinutes"],
+    ['"baseBranch": ""', "baseBranch"],
+    ['"checks": 5', "checks"],
+  ])("rejects bad value %s", (field, name) => {
+    writeFileSync(join(dir, "adaegg.json"), `{ "schema": 1, ${field} }`);
+    expect(() => loadConfig(dir)).toThrow(name);
   });
 
   it("names the file when missing", () => {

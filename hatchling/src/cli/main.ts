@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { openDb } from "../engine/db.ts";
 import { dbPath, findRepoRoot } from "../engine/paths.ts";
+import { listNodeRuns, listRuns, listRunsForItem, type NodeRun, type Run } from "../engine/runs.ts";
 import {
   addWorkItem,
   cancelWorkItem,
@@ -33,7 +34,9 @@ Commands:
                         when it is not a terminal.
   list [--status <s>] [--json]
                         List work items. Statuses: ${STATUSES.join(", ")}.
-  show <id> [--json]    Show one work item with its contents and blockers.
+  show <id> [--json]    Show one work item with its contents, blockers, runs
+                        and node runs.
+  runs [--limit n]      List the newest runs (default 20).
   cancel <id>           Cancel a queued item.
   retry <id>            Queue a failed or cancelled item again.
   status                Count items per status.
@@ -83,7 +86,12 @@ function formatItem(item: ListedWorkItem): string {
   return `${short(item.id)}  ${item.status}  p${item.priority}  ${item.title}${describeBlocked(item)}\n`;
 }
 
-function formatShow(item: ListedWorkItem): string {
+function formatNodeRun(n: NodeRun): string {
+  const cost = n.costUsd === null ? "-" : `$${n.costUsd.toFixed(4)}`;
+  return `    ${n.nodeId}  attempt ${n.attempt}  ${n.outcome ?? "-"}  problem: ${n.problem ?? "-"}  cost: ${cost}`;
+}
+
+function formatShow(item: ListedWorkItem, runs: (Run & { nodeRuns: NodeRun[] })[]): string {
   const lines = [
     `id: ${item.id}`,
     `title: ${item.title}`,
@@ -99,6 +107,13 @@ function formatShow(item: ListedWorkItem): string {
     "contents:",
     item.contents,
   ];
+  if (runs.length > 0) {
+    lines.push("runs:");
+    for (const run of runs) {
+      lines.push(`  ${short(run.id)}  ${run.workflowId}  ${run.status}  ${run.currentNode ?? "-"}`);
+      for (const n of run.nodeRuns) lines.push(formatNodeRun(n));
+    }
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -182,7 +197,32 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       const db = openDb(dbPath(findRepoRoot(io.cwd), env));
       try {
         const item = withAllBlockers(db, getWorkItem(db, ref));
-        out(values.json ? `${JSON.stringify(item, null, 2)}\n` : formatShow(item));
+        const runs = listRunsForItem(db, item.id).map((run) => ({ ...run, nodeRuns: listNodeRuns(db, run.id) }));
+        out(values.json ? `${JSON.stringify({ ...item, runs }, null, 2)}\n` : formatShow(item, runs));
+      } finally {
+        db.close();
+      }
+      return;
+    }
+    case "runs": {
+      const { values, positionals } = parse(args, { limit: { type: "string" } });
+      if (values.help) return void out(HELP);
+      if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals[0]}`);
+      let limit = 20;
+      if (values.limit !== undefined) {
+        if (!/^\d+$/.test(values.limit) || Number(values.limit) < 1)
+          throw new UsageError(`--limit must be a positive integer, got ${values.limit}`);
+        limit = Number(values.limit);
+      }
+      const db = openDb(dbPath(findRepoRoot(io.cwd), env));
+      try {
+        out(
+          listRuns(db, { limit })
+            .map(
+              (r) => `${short(r.id)}  ${r.workflowId}  ${r.status}  ${r.currentNode ?? "-"}  ${short(r.workItemId)}\n`,
+            )
+            .join(""),
+        );
       } finally {
         db.close();
       }
@@ -241,7 +281,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
 }
 
 function isCommand(name: string): boolean {
-  return ["add", "list", "show", "cancel", "retry", "status"].includes(name);
+  return ["add", "list", "show", "runs", "cancel", "retry", "status"].includes(name);
 }
 
 export async function main(): Promise<void> {

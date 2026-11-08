@@ -2,7 +2,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-export const ConfigSchema = z.object({ schema: z.literal(1) });
+export const ConfigSchema = z.object({
+  schema: z.literal(1),
+  baseBranch: z.string().min(1).default("main"),
+  checks: z.string().default("npm run check"),
+  // An empty string skips the setup step.
+  setup: z.string().default("npm ci"),
+  checksTimeoutMinutes: z.number().positive().default(20),
+  maxConcurrentRuns: z.number().int().positive().default(1),
+});
 
 export type Config = z.infer<typeof ConfigSchema>;
 

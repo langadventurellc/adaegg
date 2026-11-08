@@ -1,14 +1,16 @@
 # hatchling
 
-A hatchling is a small, self-rewriting system: it is changed by describing the change as work items, and agents implement them in this repo. Today it has a SQLite work item queue and the `hatch` CLI. The daemon, workflows and agents that run the queue are not present yet.
+A hatchling is a small, self-rewriting system: it is changed by describing the change as work items, and agents implement them in this repo. It has a SQLite work item queue, the `hatch` CLI, and a daemon that claims queued items and runs them through YAML workflows (branch, checks, merge). The agents that do the implementing are not present yet.
 
 ## Layout
 
-- `src/engine/`: paths, config, database and queue store.
+- `src/engine/`: paths, config, database, queue store, run store, runner, workflow loader and node types (`nodes/`).
+- `src/daemon/`: the daemon (`daemon.ts`) and its entry point (`main.ts`).
 - `src/cli/`: the `hatch` CLI.
+- `workflows/`: workflow YAML files, loaded at daemon start.
 - `src/ui/`: the browser UI (a placeholder for now).
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
-- `docs/system/`: how the system works; start with `queue.md`.
+- `docs/system/`: how the system works; start with `queue.md` and `workflows.md`. `docs/guides/add-a-node.md` explains how to add a node type.
 - `adaegg.json`: marks the repo root.
 - `.adaegg/`: state (the SQLite database). Git-ignored; never commit it.
 
@@ -21,13 +23,22 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 ```
 hatch add "<title>" [--file <path>] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
 hatch list [--status <s>] [--json]
-hatch show <id> [--json]
+hatch show <id> [--json]   # also lists the item's runs and node runs
+hatch runs [--limit n]     # newest runs first (default 20)
 hatch cancel <id>      # queued items only
 hatch retry <id>       # failed or cancelled items only
 hatch status           # count per status
 ```
 
 `add` reads the contents from `--file`, else from stdin when it is piped. Ids may be a prefix of at least 4 characters. `hatch add` is how you chain requests: queue follow-up work with `hatch add "title" --blocked-by <id>` and it waits until that item is done.
+
+## The daemon
+
+`npm run daemon` loads `workflows/`, resumes interrupted runs, then claims queued items every 2 seconds (at most `maxConcurrentRuns` at once). An invalid workflow file is printed to stderr and the daemon exits 1. SIGINT/SIGTERM stop it and leave running runs to resume on the next start.
+
+## Git layout
+
+The daemon works in worktrees under `.adaegg/worktrees/<id8>` on branches `hatch/<id8>-<slug>` (`<id8>` is the first 8 characters of the work item id), and merges them into the base branch in the main checkout, which must be clean and on that branch.
 
 ## Worktrees
 

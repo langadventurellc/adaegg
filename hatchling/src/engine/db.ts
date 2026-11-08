@@ -23,6 +23,32 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (item_id, blocked_by_id)
   );
   CREATE INDEX work_items_claim ON work_items (status, kind, priority, created_at);`,
+  `CREATE TABLE runs (
+    id TEXT PRIMARY KEY,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    workflow_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+    current_node TEXT,
+    state TEXT NOT NULL,
+    error TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  CREATE TABLE node_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    node_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    outcome TEXT,
+    problem TEXT,
+    cost_usd REAL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+  );
+  CREATE INDEX runs_status ON runs (status);
+  CREATE INDEX node_runs_run ON node_runs (run_id);`,
 ];
 
 export function openDb(path: string): DatabaseSync {
