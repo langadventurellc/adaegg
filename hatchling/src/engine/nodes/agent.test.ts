@@ -287,6 +287,17 @@ describe("agent node results", () => {
     },
   );
 
+  it("keeps cost and tokens when a non-auth error result with subtype success is followed by a rejection", async () => {
+    const { ctx } = setup();
+    const result = await runAgent(ctx, rejecting([success({ is_error: true, result: "API Error: 500" })]));
+    expect(result).toMatchObject({
+      outcome: "failed",
+      problem: "Claude Code process exited with code 1",
+      costUsd: 0.42,
+      tokens: { input: 120, output: 34 },
+    });
+  });
+
   it("still throws a rejection that no result explains", async () => {
     const { ctx } = setup();
     await expect(runAgent(ctx, rejecting([]))).rejects.toThrow("exited with code 1");
@@ -435,6 +446,14 @@ describe("implement step guard", () => {
     });
     expect((await runAgent(ctx, query, config)).outcome).toBe("done");
     expect(sh(root, "log", "-1", "--format=%s")).toBe("mine");
+  });
+
+  it("keeps cost and tokens when the guard itself throws", async () => {
+    const { ctx } = onBranch();
+    const broken = { ...ctx, state: { ...ctx.state, base: "no-such-ref" } };
+    const result = await runAgent(broken, fake([success()]), config);
+    expect(result).toMatchObject({ outcome: "failed", costUsd: 0.42, tokens: { input: 120, output: 34 } });
+    expect(result.problem).toBeTruthy();
   });
 
   it("fails when the branch has no commits of its own", async () => {

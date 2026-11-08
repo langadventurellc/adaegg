@@ -126,6 +126,10 @@ function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
+function errorMessageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 // Commits what the agent left and fails the step when the branch still has nothing of its own.
 function implementGuard(ctx: NodeContext<AgentConfig>, worktree: string): NodeResult | null {
   const { branch, base } = ctx.state;
@@ -224,7 +228,11 @@ function createNode(type: "agent" | "review", query: QueryFn) {
         return { outcome: "blocked", problem: AUTH_PROBLEM, ...spent };
       }
       // A closing exception is only swallowed when a terminal error result explains it.
-      if (closeError !== undefined && (!result || result.subtype === "success")) throw closeError;
+      // The usage captured so far is kept: it is returned as a failure rather than rethrown.
+      if (closeError !== undefined && (!result || result.subtype === "success")) {
+        if (!result) throw closeError;
+        return { outcome: "failed", problem: errorMessageOf(closeError), ...spent };
+      }
       if (!result) return { outcome: "failed", problem: "the agent ended without a result" };
       if (result.subtype !== "success") {
         const errors = Array.isArray(result.errors) ? result.errors.join("; ") : "";
@@ -244,7 +252,12 @@ function createNode(type: "agent" | "review", query: QueryFn) {
       }
 
       if (config.commit) {
-        const failed = implementGuard(ctx, worktree);
+        let failed: NodeResult | null;
+        try {
+          failed = implementGuard(ctx, worktree);
+        } catch (err) {
+          failed = { outcome: "failed", problem: errorMessageOf(err) };
+        }
         if (failed) return { ...failed, ...spent };
       }
       return { outcome: "done", ...spent };
