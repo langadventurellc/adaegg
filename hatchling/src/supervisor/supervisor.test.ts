@@ -691,7 +691,7 @@ describe("rollback", () => {
 });
 
 describe("process shutdown", () => {
-  it("exits promptly after SIGTERM once the daemon has stopped, without waiting out the grace period", async () => {
+  function writeRunner(): string {
     const runner = join(scriptDir, "run-supervisor.mjs");
     writeFileSync(
       runner,
@@ -716,6 +716,11 @@ process.exitCode = await runSupervisor({
 });
 `,
     );
+    return runner;
+  }
+
+  it("exits promptly after SIGTERM once the daemon has stopped, without waiting out the grace period", async () => {
+    const runner = writeRunner();
     const supervisor = nodeSpawn("node", [runner, repo, stateDir, script], { stdio: "ignore" });
     const exited = new Promise<number | null>((resolve) => supervisor.on("exit", resolve));
     await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
@@ -726,14 +731,14 @@ process.exitCode = await runSupervisor({
   });
 
   it("does not wait out the setup kill grace after a completed setup when told to stop", async () => {
-    const runner = join(scriptDir, "run-supervisor.mjs");
+    const runner = writeRunner();
     writeRestartRequest(stateDir, makeRequest(true));
     const supervisor = nodeSpawn("node", [runner, repo, stateDir, script, "true"], { stdio: "ignore" });
     const exited = new Promise<number | null>((resolve) => supervisor.on("exit", resolve));
     await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
     const sentAt = Date.now();
     supervisor.kill("SIGTERM");
-    await exited;
+    expect(await exited).toBe(0);
     expect(Date.now() - sentAt).toBeLessThan(2000);
   });
 });
