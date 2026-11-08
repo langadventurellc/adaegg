@@ -7,17 +7,19 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
-    "lint": "biome check --error-on-warnings .",
-    "format": "biome check --write .",
-    "typecheck": "tsc -p tsconfig.json",
+    "dev": "vite hatchling",
+    "build": "tsc -p hatchling/tsconfig.json && vite build hatchling",
+    "lint": "biome check --error-on-warnings . && cd hatchling && ../node_modules/.bin/biome check --error-on-warnings .",
+    "format": "biome check --write . && cd hatchling && ../node_modules/.bin/biome check --write .",
+    "typecheck": "tsc -p hatchling/tsconfig.json",
     "test": "vitest run"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vite": "8.3.4",
-    "vitest": "5.0.4"
+    "vitest": "5.0.4",
+    "zod": "4.6.7"
   }
 }

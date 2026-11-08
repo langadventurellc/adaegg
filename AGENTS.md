@@ -16,16 +16,22 @@ Later versions may add other agent providers, sharing or templates between hatch
 - Biome for lint and formatting.
 - pnpm, with Node 24 from `mise.toml` for repository development.
 
+## Layout
+
+- The repository root is Ada Egg's own development repo (pnpm, Biome, Vitest).
+- `hatchling/` is the template that a setup command copies into a user's repo; it uses npm and has its own `biome.jsonc` and `tsconfig.json`.
+- There is no pnpm workspace. Root devDependencies hold everything the template uses, and `tests/template-pin.test.ts` pins the template's versions to them.
+
 ## Commands
 
 ```
 pnpm install
-pnpm dev         # Vite dev server
-pnpm lint        # Biome: lint, formatting and import order, warnings fail it; changes nothing
-pnpm format      # fix what Biome can fix automatically
-pnpm typecheck
-pnpm test
-pnpm build
+pnpm dev         # Vite dev server for the template UI (hatchling/)
+pnpm lint        # Biome on the root, then on hatchling/ with its own config: lint, formatting and import order, warnings fail it; changes nothing
+pnpm format      # fix what Biome can fix automatically, in both
+pnpm typecheck   # tsc on hatchling/tsconfig.json
+pnpm test        # Vitest from the root, including hatchling/**/*.test.ts
+pnpm build       # typecheck, then vite build into hatchling/dist
 ```
 
 ## Conventions

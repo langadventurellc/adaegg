@@ -2,7 +2,8 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["**", "!pnpm-lock.yaml"]
+    // hatchling/ has its own root config (it is a repo root once copied); the second lint pass covers it.
+    "includes": ["**", "!pnpm-lock.yaml", "!hatchling"]
   },
   "formatter": {
     "enabled": true,

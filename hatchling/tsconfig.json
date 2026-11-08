@@ -12,8 +12,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["node", "vite/client"]
   },
   "include": ["src"]
 }
