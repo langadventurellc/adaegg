@@ -3,9 +3,12 @@ import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../engine/db.ts";
 import { type CliIo, runCli } from "./main.ts";
+
+// Every call opens and migrates a fresh database; on a slow disk that alone nears the 5s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const marker = join(import.meta.dirname, "..", "..", "adaegg.json");
 const binPath = join(import.meta.dirname, "..", "..", "bin", "hatch");
