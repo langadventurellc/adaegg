@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -68,18 +68,52 @@ export function deleteRestartRequest(stateDir: string): void {
   rmSync(restartPath(stateDir), { force: true });
 }
 
-// Deletes the request only if it is still `request`: a newer one written meanwhile must survive.
-export function deleteRestartRequestIfUnchanged(stateDir: string, request: RestartRequest): boolean {
-  let current: RestartRequest | null;
+// Where the supervisor holds a taken restart.json while it decides; one supervisor, so one fixed name.
+export const consumingPath = (stateDir: string): string => join(stateDir, "restart.json.consuming");
+
+function readTakenRequest(path: string): RestartRequest | null {
   try {
-    current = readRestartRequest(stateDir);
+    const parsed = RestartRequestSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+    return parsed.success ? parsed.data : null;
   } catch {
-    return false;
+    return null;
   }
-  if (current === null) return true;
-  if (JSON.stringify(current) !== JSON.stringify(request)) return false;
-  deleteRestartRequest(stateDir);
-  return true;
+}
+
+// Puts a taken request back without overwriting one the daemon wrote meanwhile (link fails with EEXIST).
+function restoreTaken(aside: string, target: string): void {
+  try {
+    linkSync(aside, target);
+  } catch (err) {
+    // Any other error leaves the aside file in place so the request is not lost.
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  rmSync(aside, { force: true });
+}
+
+// Consumes the request only if it is `request`: it is moved aside atomically, so a newer one the daemon
+// writes meanwhile lands in a fresh restart.json that this function never deletes.
+export function deleteRestartRequestIfUnchanged(
+  stateDir: string,
+  request: RestartRequest,
+  hooks?: { afterTake?: () => void },
+): boolean {
+  const target = restartPath(stateDir);
+  const aside = consumingPath(stateDir);
+  try {
+    renameSync(target, aside);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw err;
+  }
+  hooks?.afterTake?.();
+  const taken = readTakenRequest(aside);
+  if (taken !== null && JSON.stringify(taken) === JSON.stringify(request)) {
+    rmSync(aside, { force: true });
+    return true;
+  }
+  restoreTaken(aside, target);
+  return false;
 }
 
 export function writeReady(stateDir: string, ready: Ready): void {
