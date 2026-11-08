@@ -10,6 +10,13 @@ export const ConfigSchema = z.object({
   setup: z.string().default("npm ci"),
   checksTimeoutMinutes: z.number().positive().default(20),
   maxConcurrentRuns: z.number().int().positive().default(1),
+  // Model aliases for the agent nodes, by the role a node names in its `model`.
+  models: z
+    .object({
+      implement: z.string().default("sonnet"),
+      review: z.string().default("sonnet"),
+    })
+    .default({ implement: "sonnet", review: "sonnet" }),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

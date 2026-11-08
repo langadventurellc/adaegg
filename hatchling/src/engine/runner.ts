@@ -74,6 +74,9 @@ export function createRunner(deps: RunnerDeps): Runner {
       try {
         result = await nodeType.run({
           workItem: getWorkItem(db, run.workItemId),
+          runId: run.id,
+          nodeId,
+          attempt,
           state: run.state,
           config: parsedConfig.data,
           paths,
