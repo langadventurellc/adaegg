@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { PLAN_JSON_SCHEMA } from "../plan.ts";
 import { AUTH_PROBLEM, buildPrompt, createAgentNode, createReviewNode, type QueryFn } from "./agent.ts";
 import { buildTemplateRepo, copyRepo, makeCtx, makeWorkItem, removeAllRepos, removeCopies, sh } from "./test-repo.ts";
 import { type RunState, RunStateSchema } from "./types.ts";
@@ -417,6 +418,103 @@ describe("review node verdicts", () => {
   it("fails on changes with no findings", async () => {
     const result = await run([success({ structured_output: { verdict: "changes", findings: [] } })]);
     expect(result).toMatchObject({ outcome: "failed", problem: "review gave no verdict" });
+  });
+});
+
+describe("plan output", () => {
+  const planConfig = { ...agentConfig, tools: ["Read"], bash: [], output: "plan" };
+  const plan = {
+    summary: "two parts",
+    items: [
+      { key: "a", title: "Part A", contents: "Do A.", dependsOn: [] },
+      { key: "b", title: "Part B", contents: "Do B.", dependsOn: ["a"] },
+    ],
+  };
+
+  it("reads the plan from structured output and asks for the JSON schema", async () => {
+    const { ctx } = setup();
+    const captured: Captured = {};
+    const result = await runAgent(ctx, fake([success({ structured_output: plan })], captured), planConfig);
+    expect(result).toMatchObject({ outcome: "done", costUsd: 0.42, tokens: { input: 120, output: 34 } });
+    expect(result.state?.plan).toEqual(plan);
+    expect(captured.options?.outputFormat).toEqual({ type: "json_schema", schema: PLAN_JSON_SCHEMA });
+  });
+
+  it("falls back to the last fenced json block", async () => {
+    const { ctx } = setup();
+    const first = { summary: "old", items: [{ key: "x", title: "X", contents: "x", dependsOn: [] }] };
+    const text = `Draft:\n\`\`\`json\n${JSON.stringify(first)}\n\`\`\`\nFinal:\n\`\`\`json\n${JSON.stringify(plan)}\n\`\`\``;
+    const result = await runAgent(ctx, fake([success({ result: text })]), planConfig);
+    expect(result.outcome).toBe("done");
+    expect(result.state?.plan).toEqual(plan);
+  });
+
+  it("fails on an invalid plan, keeping cost and tokens", async () => {
+    const { ctx } = setup();
+    const bad = {
+      summary: "",
+      items: [
+        { key: "a", title: "A", contents: "a", dependsOn: ["b"] },
+        { key: "b", title: "B", contents: "b" },
+      ],
+    };
+    const result = await runAgent(ctx, fake([success({ structured_output: bad })]), planConfig);
+    expect(result).toMatchObject({ outcome: "failed", costUsd: 0.42, tokens: { input: 120, output: 34 } });
+    expect(result.problem).toMatch(/^the agent gave no valid plan: /);
+  });
+
+  it("fails when there is no plan at all", async () => {
+    const { ctx } = setup();
+    const result = await runAgent(ctx, fake([success({ result: "no plan here" })]), planConfig);
+    expect(result).toMatchObject({ outcome: "failed", problem: "the agent gave no valid plan: no JSON found" });
+  });
+
+  it("does not ask for a plan with output text", async () => {
+    const { ctx } = setup();
+    const result = await runAgent(ctx, fake([success({ structured_output: plan })]));
+    expect(result.state).toBeUndefined();
+  });
+});
+
+describe("cwd", () => {
+  const rootConfig = { ...agentConfig, cwd: "root", tools: ["Read"], bash: [] };
+
+  it("runs the SDK in the repo root with no worktree in the state", async () => {
+    const root = copyRepo(template);
+    mkdirSync(join(root, "prompts"), { recursive: true });
+    writeFileSync(join(root, "prompts", "implement.md"), "You are the planner.\n");
+    const ctx = makeCtx(root);
+    expect(ctx.state.worktree).toBeNull();
+    const captured: Captured = {};
+    const result = await runAgent(ctx, fake([success()], captured), rootConfig);
+    expect(result.outcome).toBe("done");
+    expect(captured.options?.cwd).toBe(root);
+  });
+
+  it("uses the worktree by default, and is blocked without one", async () => {
+    const { ctx } = setup({ state: { worktree: null } });
+    const result = await runAgent(ctx, fake([success()]), { ...agentConfig, cwd: "worktree" });
+    expect(result.outcome).toBe("blocked");
+  });
+
+  it("refuses commit with cwd root, naming both keys", () => {
+    for (const node of [createAgentNode({ query: fake([]) }), createReviewNode({ query: fake([]) })]) {
+      const parsed = node.configSchema.safeParse({ ...rootConfig, commit: true });
+      expect(parsed.success).toBe(false);
+      const message = parsed.error?.issues[0]?.message ?? "";
+      expect(message).toContain("commit");
+      expect(message).toContain("cwd");
+    }
+  });
+
+  it("keeps refusing output verdict on the agent type, accepts plan, and the review type forces verdict", () => {
+    const agent = createAgentNode({ query: fake([]) });
+    const refused = agent.configSchema.safeParse({ ...agentConfig, output: "verdict" });
+    expect(refused.success).toBe(false);
+    expect(refused.error?.issues[0]?.message).toBe('output "verdict" needs the review node type');
+    expect(agent.configSchema.safeParse({ ...agentConfig, output: "plan" }).success).toBe(true);
+    const review = createReviewNode({ query: fake([]) });
+    expect((parse(review, { ...agentConfig, output: "plan" }) as { output: string }).output).toBe("verdict");
   });
 });
 

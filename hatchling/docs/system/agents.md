@@ -21,14 +21,15 @@ As for every node, a workflow needs an edge for each outcome.
 | `bash` | Bash command patterns to allow. Each becomes `Bash(<pattern>)`, for example `git *`. |
 | `deny` | Rules to deny, written as the SDK does (`Bash(git push*)`). |
 | `maxTurns`, `maxBudgetUsd` | Passed to the SDK. The budget is the SDK's own estimate and can overshoot. |
-| `output` | `text` (default) or `verdict`. |
+| `output` | `text` (default), `verdict` or `plan`. `verdict` is for the `review` type (forced there); `plan` is for the `agent` type. |
+| `cwd` | `worktree` (default) or `root`: the main checkout, for read-only agents such as the planner. `commit: true` with `cwd: root` is a config error. |
 | `commit` | `false` by default. `true` turns on the commit guard (below). |
 
 The prompt sent is `buildPrompt(promptText, workItem, state)`: the role text, the work item's title, `Work item id:` and (when the run has one) `Base branch:` lines, and its contents, then "Check output", "Review findings" and "Merge conflicts" sections for whatever the run state holds (`checkOutput`, `findings`, `conflictFiles`).
 
 ## Tools: an allowlist that denies the rest
 
-The SDK is called with `cwd` set to the run's worktree (the node is `blocked` if the run has none), `allowedTools` (`tools` plus a `Bash(...)` entry per `bash` pattern), `disallowedTools` (`deny`), `settingSources: ['project']` (the repo's own `CLAUDE.md` and skills apply, the user's personal settings do not) and an abort controller tied to the run's signal.
+The SDK is called with `cwd` set to the run's worktree, or to the repo root with `cwd: root` (the node is `blocked` if the run has no worktree and `cwd` is `worktree`; with `cwd: root` it needs none), `allowedTools` (`tools` plus a `Bash(...)` entry per `bash` pattern), `disallowedTools` (`deny`), `settingSources: ['project']` (the repo's own `CLAUDE.md` and skills apply, the user's personal settings do not) and an abort controller tied to the run's signal.
 
 `allowedTools` only auto-approves; it does not restrict. A tool that is not listed would fall through to a permission prompt, and nobody answers a prompt in a daemon: the run would hang. So the node sets `permissionMode: 'dontAsk'`, which denies anything not pre-approved. The `deny` rules are scoped and apply in every mode. `bypassPermissions` is never used.
 
@@ -39,6 +40,14 @@ The SDK is called with `cwd` set to the run's worktree (the node is `blocked` if
 ## Verdicts
 
 A `review` node asks the SDK for structured output (`outputFormat: { type: 'json_schema' }`) shaped `{ verdict: 'approve' | 'changes', findings: string[] }` and reads `structured_output` from the result. If that is absent it parses the last fenced `json` block of the result text. The object is validated with Zod and `findings` must be non-empty for `changes`. `approve` sets `state.findings` to `[]`; `changes` sets it to the findings. A missing or invalid verdict is `failed` with the problem `review gave no verdict`.
+
+## Plans
+
+With `output: plan` the node asks the SDK for structured output with `PLAN_JSON_SCHEMA` (`src/engine/plan.ts`) and reads `structured_output` from the result, else the last fenced `json` block of the result text. The object is validated with `PlanSchema` (item count, keys, and `dependsOn` naming only earlier items). A valid plan is stored in `state.plan` and the outcome is `done`. A missing or invalid plan is `failed` with the problem `the agent gave no valid plan: <issue>` (`no JSON found` when there is none). Cost and tokens are recorded as for the other outputs.
+
+### Read-only rule for `cwd: root`
+
+An agent with `cwd: root` shares the main checkout with the daemon, and the `merge` node refuses a dirty main checkout. Such an agent must only have read tools (`Read`, `Glob`, `Grep`) and read-only Bash patterns (`git log*`, `git show*`, `git diff*`, `git status*`, `ls *`), never `Write`, `Edit`, `NotebookEdit` or a command that changes anything.
 
 ## Results
 
