@@ -1,0 +1,264 @@
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { openDb } from "../engine/db.ts";
+import { type CliIo, runCli } from "./main.ts";
+
+const marker = join(import.meta.dirname, "..", "..", "adaegg.json");
+const binPath = join(import.meta.dirname, "..", "..", "bin", "hatch");
+
+let base: string;
+let repo: string;
+let state: string;
+let counter = 0;
+
+beforeEach(() => {
+  base = realpathSync(mkdtempSync(join(tmpdir(), "adaegg-cli-")));
+  repo = join(base, "repo");
+  state = join(base, "state");
+  mkdirSync(repo);
+  copyFileSync(marker, join(repo, "adaegg.json"));
+  counter++;
+});
+
+afterAll(() => {
+  rmSync(base, { recursive: true, force: true });
+});
+
+type Result = { code: number; out: string; err: string };
+
+async function hatch(args: string[], opts: { stdin?: string; tty?: boolean; cwd?: string } = {}): Promise<Result> {
+  let out = "";
+  let err = "";
+  const stdin = Object.assign(Readable.from(opts.stdin === undefined ? [] : [opts.stdin]), {
+    isTTY: opts.tty ?? false,
+  });
+  const io: CliIo = {
+    stdout: {
+      write: (t) => {
+        out += t;
+      },
+    },
+    stderr: {
+      write: (t) => {
+        err += t;
+      },
+    },
+    stdin,
+    cwd: opts.cwd ?? repo,
+    env: { ADAEGG_STATE_DIR: state },
+  };
+  const code = await runCli(args, io);
+  return { code, out, err };
+}
+
+async function add(args: string[], stdin?: string): Promise<string> {
+  const r = await hatch(["add", ...args], stdin === undefined ? {} : { stdin });
+  expect(r.code).toBe(0);
+  const m = /^queued (\w{8})\n$/.exec(r.out);
+  expect(m).not.toBeNull();
+  return (m as RegExpExecArray)[1] as string;
+}
+
+function expectOneLineError(r: Result, pattern: RegExp) {
+  expect(r.code).toBe(1);
+  expect(r.out).toBe("");
+  expect(r.err).toMatch(/^hatch: [^\n]+\n$/);
+  expect(r.err).toMatch(pattern);
+}
+
+describe("add", () => {
+  it("reads contents from --file relative to cwd", async () => {
+    writeFileSync(join(repo, "body.md"), "from file");
+    const id = await add(["T", "--file", "body.md"]);
+    const shown = JSON.parse((await hatch(["show", id, "--json"])).out);
+    expect(shown.contents).toBe("from file");
+    expect(shown.title).toBe("T");
+  });
+
+  it("reads contents from stdin when it is not a TTY", async () => {
+    const id = await add(["T"], "from stdin");
+    expect(JSON.parse((await hatch(["show", id, "--json"])).out).contents).toBe("from stdin");
+  });
+
+  it("uses empty contents when stdin is a TTY", async () => {
+    const r = await hatch(["add", "T"], { stdin: "ignored", tty: true });
+    const id = r.out.slice(7, 15);
+    expect(JSON.parse((await hatch(["show", id, "--json"])).out).contents).toBe("");
+  });
+
+  it("records blockers by id prefix, priority and parent", async () => {
+    const a = await add(["A"]);
+    const b = await add(["B", "--blocked-by", a, "--priority", "5", "--parent", a]);
+    const shown = JSON.parse((await hatch(["show", b, "--json"])).out);
+    expect(shown.priority).toBe(5);
+    expect(shown.parentId.startsWith(a)).toBe(true);
+    expect(shown.blockedBy).toHaveLength(1);
+    expect(shown.blockedBy[0].startsWith(a)).toBe(true);
+  });
+
+  it.each([["--priority", "-1"], ["--priority=-1"]])("stores a negative priority given as %j", async (...flag) => {
+    const id = await add(["later", ...flag]);
+    expect(JSON.parse((await hatch(["show", id, "--json"])).out).priority).toBe(-1);
+    expect((await hatch(["list"])).out).toContain("p-1");
+  });
+
+  it("accepts several --blocked-by", async () => {
+    const a = await add(["A"]);
+    const b = await add(["B"]);
+    const c = await add(["C", "--blocked-by", a, "--blocked-by", b]);
+    expect(JSON.parse((await hatch(["show", c, "--json"])).out).blockedBy).toHaveLength(2);
+  });
+});
+
+describe("list, show, cancel, retry, status", () => {
+  it("lists human lines with a blocked annotation", async () => {
+    const a = await add(["First"]);
+    const b = await add(["Second", "--blocked-by", a, "--priority", "2"]);
+    const r = await hatch(["list"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(`${a}  queued  p0  First\n${b}  queued  p2  Second  (blocked by ${a})\n`);
+  });
+
+  it("lists json with blockedBy and filters by status", async () => {
+    const a = await add(["First"]);
+    await add(["Second", "--blocked-by", a]);
+    await hatch(["cancel", a]);
+    const all = JSON.parse((await hatch(["list", "--json"])).out);
+    expect(all).toHaveLength(2);
+    expect(all[1].blockedBy).toHaveLength(1);
+    const cancelled = JSON.parse((await hatch(["list", "--status", "cancelled", "--json"])).out);
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0].title).toBe("First");
+  });
+
+  it("shows all fields in human form", async () => {
+    const a = await add(["First"], "body text");
+    const b = await add(["Second"], "x");
+    await hatch(["cancel", b]);
+    const r = await hatch(["show", a]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("title: First");
+    expect(r.out).toContain("status: queued");
+    expect(r.out).toContain("blocked by: -");
+    expect(r.out).toContain("contents:\nbody text");
+  });
+
+  it("cancels and retries", async () => {
+    const a = await add(["A"]);
+    expect((await hatch(["cancel", a])).out).toBe(`cancelled ${a}\n`);
+    expect((await hatch(["retry", a])).out).toBe(`queued ${a}\n`);
+  });
+
+  it("counts every status including zeros", async () => {
+    const a = await add(["A"]);
+    await add(["B"]);
+    await hatch(["cancel", a]);
+    const r = await hatch(["status"]);
+    expect(r.out).toBe("queued  1\nin_progress  0\ndone  0\nfailed  0\ncancelled  1\n");
+  });
+});
+
+describe("errors", () => {
+  it("rejects an unknown id", async () => {
+    await add(["A"]);
+    expectOneLineError(await hatch(["show", "deadbeef"]), /no work item matches/);
+  });
+
+  it("rejects a too-short prefix", async () => {
+    expectOneLineError(await hatch(["show", "ab"]), /too short/);
+  });
+
+  it("rejects a bad --status", async () => {
+    expectOneLineError(await hatch(["list", "--status", "nope"]), /invalid status/);
+  });
+
+  it("rejects a non-integer --priority", async () => {
+    expectOneLineError(await hatch(["add", "T", "--priority", "1.5"]), /integer/);
+  });
+
+  it("rejects a missing title", async () => {
+    expectOneLineError(await hatch(["add"]), /missing title/);
+  });
+
+  it("rejects a missing --file", async () => {
+    expectOneLineError(await hatch(["add", "T", "--file", "nope.md"]), /cannot read file/);
+  });
+
+  it("rejects cancelling a non-queued item", async () => {
+    const a = await add(["A"]);
+    await hatch(["cancel", a]);
+    expectOneLineError(await hatch(["cancel", a]), /cannot cancel/);
+  });
+
+  it("rejects an unknown blocker", async () => {
+    expectOneLineError(await hatch(["add", "T", "--blocked-by", "deadbeef"]), /blocker not found/);
+  });
+
+  it("explains too-short and ambiguous --blocked-by prefixes and adds nothing", async () => {
+    const db = openDb(join(state, "hatch.db"));
+    for (const id of ["abcd1111-0000", "abcd2222-0000"]) {
+      db.prepare("INSERT INTO work_items (id, title, created_at, updated_at) VALUES (?, 't', 'x', 'x')").run(id);
+    }
+    db.close();
+    expectOneLineError(await hatch(["add", "T", "--blocked-by", "abc"]), /too short/);
+    expectOneLineError(await hatch(["add", "T", "--blocked-by", "abcd"]), /ambiguous id prefix abcd/);
+    const listed = JSON.parse((await hatch(["list", "--json"])).out) as unknown[];
+    expect(listed).toHaveLength(2);
+  });
+
+  it("rejects an unknown option", async () => {
+    expectOneLineError(await hatch(["status", "--bogus"]), /bogus/);
+  });
+
+  it("reports a missing adaegg.json", async () => {
+    const bare = join(base, "bare");
+    mkdirSync(bare);
+    expectOneLineError(await hatch(["status"], { cwd: bare }), /no adaegg\.json/);
+  });
+});
+
+describe("help", () => {
+  it("prints usage and returns 0 for --help and -h", async () => {
+    for (const flag of ["--help", "-h"]) {
+      const r = await hatch([flag]);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Usage: hatch");
+    }
+  });
+
+  it("prints help to stderr and returns 1 for an unknown command", async () => {
+    const r = await hatch(["frobnicate"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toBe("");
+    expect(r.err).toContain("Usage: hatch");
+  });
+
+  it("prints help to stderr and returns 1 for no command", async () => {
+    const r = await hatch([]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("Usage: hatch");
+  });
+});
+
+describe("bin/hatch", () => {
+  it("runs from a linked worktree against the shared queue", () => {
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd, stdio: "pipe" });
+    git(repo, "init", "-q");
+    git(repo, "add", "adaegg.json");
+    git(repo, "commit", "-q", "-m", "init");
+    const wt = join(base, `wt${counter}`);
+    git(repo, "worktree", "add", "-q", wt, "-b", "wt");
+    const env = { ...process.env, ADAEGG_STATE_DIR: state };
+    const run = (cwd: string, ...args: string[]) =>
+      execFileSync("node", [binPath, ...args], { cwd, env, encoding: "utf8", input: "" });
+    const queued = run(wt, "add", "From worktree");
+    expect(queued).toMatch(/^queued \w{8}\n$/);
+    expect(run(repo, "list")).toContain("From worktree");
+    expect(run(wt, "status")).toContain("queued  1");
+  });
+});
