@@ -12,8 +12,9 @@ import { git, isAncestor } from "../engine/nodes/git.ts";
 import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { createRunner } from "../engine/runner.ts";
 import { listRunningRuns, type Run } from "../engine/runs.ts";
+import { fireDueSchedules } from "../engine/schedule.ts";
 import { claimNext, failWorkItem, getWorkItem } from "../engine/store.ts";
-import type { Workflow } from "../engine/workflows/schema.ts";
+import { type Workflow, workflowKind } from "../engine/workflows/schema.ts";
 
 export type DaemonDeps = {
   db: DatabaseSync;
@@ -22,6 +23,7 @@ export type DaemonDeps = {
   appConfig: Config;
   paths: { root: string; stateDir: string };
   tickMs?: number;
+  now?: () => Date;
   // Called once, with no run in flight, after a merge changed the daemon's own code.
   onRestart?: (request: RestartRequest) => void;
 };
@@ -35,6 +37,7 @@ export type Daemon = {
 export function createDaemon(deps: DaemonDeps): Daemon {
   const { db, workflows, appConfig } = deps;
   const tickMs = deps.tickMs ?? 2000;
+  const now = deps.now ?? (() => new Date());
   const runner = createRunner({ db, workflows, nodeTypes: deps.nodeTypes, appConfig, paths: deps.paths });
   const controller = new AbortController();
   const inFlight = new Set<Promise<unknown>>();
@@ -114,12 +117,16 @@ export function createDaemon(deps: DaemonDeps): Daemon {
       // claim nothing: a second self-change now would race the supervisor's verdict on the first.
       const blocked = () => restartPending !== null || existsSync(restartPath(deps.paths.stateDir));
       if (controller.signal.aborted || blocked()) return;
+      try {
+        fireDueSchedules(db, workflows, now());
+      } catch (err) {
+        process.stderr.write(`daemon: schedule failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      }
       for (const workflow of workflows) {
-        if (workflow.trigger.type !== "queue") continue;
         while (inFlight.size < appConfig.maxConcurrentRuns && !controller.signal.aborted && !blocked()) {
           let item: ReturnType<typeof claimNext>;
           try {
-            item = claimNext(db, workflow.trigger.kind);
+            item = claimNext(db, workflowKind(workflow));
           } catch (err) {
             process.stderr.write(`daemon: claim failed: ${err instanceof Error ? err.message : String(err)}\n`);
             return;
