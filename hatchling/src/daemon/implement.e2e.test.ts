@@ -16,7 +16,7 @@ import { createDaemon, type Daemon } from "./daemon.ts";
 
 const hatchlingRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Fails until the marker file is committed.
+// Fails until the marker file exists.
 const MARKER_CHECK = 'test -f .ok || { echo "missing .ok marker"; exit 1; }';
 
 let template: string;
@@ -53,7 +53,11 @@ function fakeQuery(calls: Call[], script: (call: Call, nth: number, cwd: string)
     calls.push(call);
     const nth = calls.filter((c) => c.role === role).length;
     return (async function* () {
-      for (const m of script(call, nth, params.options.cwd)) yield m;
+      for (const m of script(call, nth, params.options.cwd)) {
+        // Like the SDK when the Claude process exits nonzero after its messages.
+        if (m.type === "reject") throw new Error("Claude Code process exited with code 1");
+        yield m;
+      }
     })();
   }) as unknown as QueryFn;
 }
@@ -295,6 +299,25 @@ describe("implement workflow end to end", () => {
     expect(run.status).toBe("failed");
     expect(run.error).toBe(AUTH_PROBLEM);
     expect(getWorkItem(db, item.id).status).toBe("failed");
+    expect(nodes).toEqual([
+      ["branch", "ok"],
+      ["implement", "blocked"],
+    ]);
+  });
+
+  it("keeps the sign-in guidance when the SDK rejects after the auth error", async () => {
+    const calls: Call[] = [];
+    const daemon = makeDaemon(
+      "true",
+      fakeQuery(calls, () => [
+        { type: "assistant", error: "authentication_failed", message: { content: [] } },
+        { type: "reject" },
+      ]),
+    );
+    const { run, nodes } = await runItem(daemon);
+
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe(AUTH_PROBLEM);
     expect(nodes).toEqual([
       ["branch", "ok"],
       ["implement", "blocked"],

@@ -244,6 +244,66 @@ describe("agent node results", () => {
     });
   });
 
+  // The SDK rejects after its messages when the Claude process exits nonzero.
+  const rejecting = (messages: Msg[]) =>
+    (() =>
+      (async function* () {
+        for (const m of messages) yield m;
+        throw new Error("Claude Code process exited with code 1");
+      })()) as unknown as QueryFn;
+
+  it("keeps the guidance when an assistant auth error is followed by a rejection", async () => {
+    const { ctx } = setup();
+    const result = await runAgent(
+      ctx,
+      rejecting([{ type: "assistant", error: "authentication_failed", message: { content: [] } }]),
+    );
+    expect(result).toMatchObject({ outcome: "blocked", problem: AUTH_PROBLEM });
+  });
+
+  it("keeps the guidance and cost when an auth result is followed by a rejection", async () => {
+    const { ctx } = setup();
+    const result = await runAgent(
+      ctx,
+      rejecting([success({ is_error: true, result: "Not logged in. Please authenticate" })]),
+    );
+    expect(result).toMatchObject({ outcome: "blocked", problem: AUTH_PROBLEM, costUsd: 0.42 });
+  });
+
+  it.each(["error_max_turns", "error_max_budget_usd"])(
+    "keeps the %s subtype and cost when a rejection follows",
+    async (subtype) => {
+      const { ctx } = setup();
+      const result = await runAgent(
+        ctx,
+        rejecting([{ type: "result", subtype, is_error: true, errors: ["too much"], total_cost_usd: 1, usage }]),
+      );
+      expect(result).toMatchObject({
+        outcome: "failed",
+        problem: `${subtype}: too much`,
+        costUsd: 1,
+        tokens: { input: 120, output: 34 },
+      });
+    },
+  );
+
+  it("still throws a rejection that no result explains", async () => {
+    const { ctx } = setup();
+    await expect(runAgent(ctx, rejecting([]))).rejects.toThrow("exited with code 1");
+  });
+
+  it("throws the abort reason, not the rejection, when aborted", async () => {
+    const { ctx } = setup();
+    const controller = new AbortController();
+    const query = (() =>
+      (async function* () {
+        controller.abort(new Error("stop"));
+        yield { type: "assistant", message: { content: [] } };
+        throw new Error("Claude Code process exited with code 1");
+      })()) as unknown as QueryFn;
+    await expect(runAgent({ ...ctx, signal: controller.signal }, query)).rejects.toThrow("stop");
+  });
+
   it("stops reading when the signal aborts, and throws", async () => {
     const { ctx } = setup();
     const controller = new AbortController();

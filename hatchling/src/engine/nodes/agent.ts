@@ -173,6 +173,7 @@ function createNode(type: "agent" | "review", query: QueryFn) {
 
       let authFailed = false;
       let result: Record<string, unknown> | null = null;
+      let closeError: unknown;
       try {
         const stream = query({
           prompt: buildPrompt(promptText, ctx.workItem, ctx.state),
@@ -201,7 +202,8 @@ function createNode(type: "agent" | "review", query: QueryFn) {
         }
       } catch (err) {
         if (ctx.signal.aborted) throw abortError(ctx.signal);
-        throw err;
+        // The SDK can reject after yielding messages (nonzero process exit): keep what arrived.
+        closeError = err;
       } finally {
         ctx.signal.removeEventListener("abort", onAbort);
       }
@@ -221,6 +223,8 @@ function createNode(type: "agent" | "review", query: QueryFn) {
       if (authFailed || (result?.is_error === true && authPattern.test(`${resultText}\n${errorText}`))) {
         return { outcome: "blocked", problem: AUTH_PROBLEM, ...spent };
       }
+      // A closing exception is only swallowed when a terminal error result explains it.
+      if (closeError !== undefined && (!result || result.subtype === "success")) throw closeError;
       if (!result) return { outcome: "failed", problem: "the agent ended without a result" };
       if (result.subtype !== "success") {
         const errors = Array.isArray(result.errors) ? result.errors.join("; ") : "";
