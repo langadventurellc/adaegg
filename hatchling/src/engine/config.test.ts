@@ -41,7 +41,7 @@ describe("loadConfig", () => {
 
   it.each([
     ['"maxConcurrentRuns": 0', "maxConcurrentRuns"],
-    ['"checksTimeoutMinutes": 1.5', "checksTimeoutMinutes"],
+    ['"checksTimeoutMinutes": -1.5', "checksTimeoutMinutes"],
     ['"checksTimeoutMinutes": -1', "checksTimeoutMinutes"],
     ['"baseBranch": ""', "baseBranch"],
     ['"checks": 5', "checks"],
