@@ -194,6 +194,14 @@ export function failWorkItem(db: DatabaseSync, id: string, error: string): WorkI
   });
 }
 
+// The one done -> failed transition: a merged item whose merge was reverted.
+export function markReverted(db: DatabaseSync, id: string, error: string): WorkItem {
+  return transition(db, id, "mark reverted", ["done"], "only done items can be marked reverted", "failed", {
+    error,
+    finished: true,
+  });
+}
+
 export function cancelWorkItem(db: DatabaseSync, id: string): WorkItem {
   return transition(db, id, "cancel", ["queued"], "only queued items can be cancelled", "cancelled", {
     finished: true,

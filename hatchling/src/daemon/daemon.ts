@@ -1,8 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Config } from "../engine/config.ts";
+import { type RestartRequest, touchesRestartPaths, writeRestartRequest } from "../engine/lifecycle.ts";
+import { git } from "../engine/nodes/git.ts";
 import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { createRunner } from "../engine/runner.ts";
-import { listRunningRuns } from "../engine/runs.ts";
+import { listRunningRuns, type Run } from "../engine/runs.ts";
 import { claimNext, failWorkItem, getWorkItem } from "../engine/store.ts";
 import type { Workflow } from "../engine/workflows/schema.ts";
 
@@ -13,6 +15,8 @@ export type DaemonDeps = {
   appConfig: Config;
   paths: { root: string; stateDir: string };
   tickMs?: number;
+  // Called once, with no run in flight, after a merge changed the daemon's own code.
+  onRestart?: (request: RestartRequest) => void;
 };
 
 export type Daemon = {
@@ -29,13 +33,39 @@ export function createDaemon(deps: DaemonDeps): Daemon {
   const inFlight = new Set<Promise<unknown>>();
   let timer: ReturnType<typeof setInterval> | null = null;
 
-  function track(promise: Promise<unknown>): void {
+  let restartPending: RestartRequest | null = null;
+  let restartCalled = false;
+
+  // After a run whose merge changed the daemon's own code: record the request and stop claiming.
+  function requestRestartIfNeeded(run: Run): void {
+    const { mergeCommit, changedPaths } = run.state;
+    if (restartPending || run.status !== "succeeded" || !mergeCommit || !touchesRestartPaths(changedPaths)) return;
+    try {
+      const request: RestartRequest = {
+        mergeCommit,
+        workItemId: run.workItemId,
+        preMergeHead: git(deps.paths.root, "rev-parse", `${mergeCommit}^1`),
+        requestedAt: new Date().toISOString(),
+      };
+      writeRestartRequest(deps.paths.stateDir, request);
+      restartPending = request;
+    } catch (err) {
+      process.stderr.write(`daemon: cannot request a restart: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
+  function track(promise: Promise<Run>): void {
     const tracked: Promise<unknown> = promise
+      .then(requestRestartIfNeeded)
       .catch((err) => {
         process.stderr.write(`daemon: run failed unexpectedly: ${err instanceof Error ? err.message : String(err)}\n`);
       })
       .finally(() => {
         inFlight.delete(tracked);
+        if (restartPending && inFlight.size === 0 && !restartCalled) {
+          restartCalled = true;
+          deps.onRestart?.(restartPending);
+        }
       });
     inFlight.add(tracked);
   }
@@ -49,10 +79,10 @@ export function createDaemon(deps: DaemonDeps): Daemon {
     },
 
     async tick() {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || restartPending) return;
       for (const workflow of workflows) {
         if (workflow.trigger.type !== "queue") continue;
-        while (inFlight.size < appConfig.maxConcurrentRuns && !controller.signal.aborted) {
+        while (inFlight.size < appConfig.maxConcurrentRuns && !controller.signal.aborted && !restartPending) {
           let item: ReturnType<typeof claimNext>;
           try {
             item = claimNext(db, workflow.trigger.kind);
