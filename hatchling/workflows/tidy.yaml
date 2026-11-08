@@ -1,0 +1,9 @@
+id: tidy
+name: Tidy
+trigger: { type: cron, schedule: "17 3 * * *" }
+start: tidy
+nodes:
+  - { id: tidy, type: tidy, config: { retainLogDays: 30 } }
+edges:
+  - { from: tidy, on: tidied, to: end }
+  - { from: tidy, on: failed, to: fail }

@@ -8,7 +8,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `src/daemon/`: the daemon (`daemon.ts`) and its entry point (`main.ts`).
 - `src/supervisor/`: the supervisor behind `hatch start` (restart after a self-change, rollback, crash bound).
 - `src/cli/`: the `hatch` CLI.
-- `workflows/`: workflow YAML files, loaded at daemon start (`implement.yaml`, `request.yaml` and `verify.yaml` are the shipped ones).
+- `workflows/`: workflow YAML files, loaded at daemon start (`implement.yaml`, `request.yaml`, `verify.yaml` and `tidy.yaml` are the shipped ones). `tidy.yaml` is the daily cron workflow (03:17 local time) that removes merged items' worktrees and branches and old logs; its schedule is the `trigger.schedule` in that file.
 - `prompts/`: the role prompts the agent nodes send (`implement.md`, `review.md`, `plan.md`, `verify.md`).
 - `src/ui/`: the browser UI (a placeholder for now).
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).

@@ -132,6 +132,15 @@ Every loop goes through an edge with a `max`, so a run cannot cycle forever; the
 
 The planner and verifier must not write to the main checkout, because the `merge` node refuses a dirty one: they have only `Read`, `Glob`, `Grep` and read-only `git`/`ls` bash patterns, and `src/engine/workflows/request.test.ts` checks it. A failed item leaves the items blocked by it queued; `hatch retry` is the human step.
 
+## The shipped `tidy` workflow
+
+`workflows/tidy.yaml` (trigger `cron`, schedule `17 3 * * *`, so 03:17 local time every day; items have kind `tidy`; start `tidy`) has one node, the `tidy` node with `retainLogDays: 30`. Change the time in that file's `schedule`.
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `tidy` | `tidied` | `end` | |
+| `tidy` | `failed` | `fail` | |
+
 ## Idempotent resume
 
 The runner writes `current_node` before the node runs. If the process stops (a crash, or SIGINT/SIGTERM, which abort the signal the nodes get), the run stays `running` and the next daemon start resumes it at `current_node`, so that node runs again. Every node must therefore be safe to run twice. A node whose work was cut short by an abort leaves no `node_runs` row.
@@ -147,6 +156,14 @@ The runner writes `current_node` before the node runs. If the process stops (a c
   - If base has commits the branch lacks, it merges base into the branch in the worktree first. On conflict it aborts the merge, puts the files in `state.conflictFiles` and returns `conflict`. On a clean merge it returns `moved`, so the workflow re-runs the checks. Base is brought in first so the checks run on exactly what will land on base, and conflicts are resolved in the worktree, never in the main checkout. Before merging base in, the node writes `branch.<name>.hatchMovedFrom` (the old tip). If a crash lost the `moved` outcome, the next run sees a tip that differs from it and, unless `state.checkedCommit` is that tip, returns `moved` again, so the combined commit is always checked before it lands.
   - Otherwise it runs `git merge --no-ff -m "hatch: <title> (<id8>)" <branch>` in the main checkout. A failure aborts the merge and returns `blocked`. On success it sets `mergeCommit` and `changedPaths` and returns `merged`.
   - `changedPaths` drives restarts: when a run succeeds and its merge touched `src/`, `workflows/`, `prompts/`, `bin/`, `package.json`, `package-lock.json` or `adaegg.json`, the daemon writes `<state>/restart.json`, stops claiming, waits for other runs and exits 75. See `restart-and-rollback.md`.
+
+## Housekeeping nodes
+
+- **`tidy`** (`tidied`, `failed`; config `retainLogDays`, a positive integer, default 30): frees the disk the `branch` node leaves behind. It removes:
+  - the worktree `<state dir>/worktrees/<id8>` (`git worktree remove --force`, run in the main checkout) and the branch (`git branch -d`, never `-D`) of each work item with status `done`, only when its branch is a `hatch/` branch that is an ancestor of `baseBranch`. A done item whose branch is not merged, or whose HEAD is detached, is left alone and counted as skipped. `git worktree prune` runs afterwards.
+  - each directory directly under `<state dir>/logs/` whose modification time is older than `retainLogDays` days and whose name is not the first 8 characters of a `running` run's id. Files such as `daemon.log` are kept.
+
+  It never touches the worktrees or branches of items in any other status (a failed item's worktree is how `branch` continues it on retry), `.adaegg/` state files, the database, or anything outside `worktrees/` and `logs/`. A failing step does not stop the others; the node returns `failed` with every problem joined, otherwise `tidied`. It writes `tidy: removed N worktrees, N branches, N log directories (skipped N)` to stdout. A second run changes nothing.
 
 ## Planning nodes
 
