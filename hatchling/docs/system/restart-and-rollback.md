@@ -10,13 +10,13 @@ When a run succeeds and its merge changed `src/`, `workflows/`, `prompts/`, `bin
 
 | Field | Meaning |
 | --- | --- |
-| `mergeCommit` | the merge on the base branch |
-| `workItemId` | the item that was merged |
-| `preMergeHead` | the first parent of the merge commit |
+| `mergeCommit` | the merge on the base branch (the newest covered merge, if the request covers several) |
+| `workItemId` | the item that was merged (that of `mergeCommit`) |
+| `preMergeHead` | the first parent of the oldest covered merge |
 | `requestedAt` | ISO timestamp |
 | `earlier` | optional: other merges the same restart covers (`{ mergeCommit, workItemId }`) |
 
-Every self-change stays covered. While `restart.json` exists the daemon claims nothing (the supervisor is still judging the previous self-change). If a run finishes a self-changing merge while a request is pending (several runs draining, or a resumed run during probation), the daemon adds it to the request: `mergeCommit` becomes the newest merge, `preMergeHead` stays the oldest, and the rest go in `earlier`. The supervisor only deletes the request it started the daemon for, never a newer one.
+Every self-change stays covered. While `restart.json` exists the daemon claims nothing (the supervisor is still judging the previous self-change). If a run finishes a self-changing merge while a request is pending (several runs draining, or a resumed run during probation), the daemon adds it to the request: `mergeCommit` becomes the newest merge, `preMergeHead` is the first parent of the oldest covered merge (whatever order the runs finish in), and the rest go in `earlier`. The supervisor only deletes the request it started the daemon for, never a newer one.
 
 ## Readiness
 

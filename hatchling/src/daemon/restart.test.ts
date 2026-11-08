@@ -204,6 +204,51 @@ describe("restart request", () => {
     expect(request?.earlier).toEqual([{ mergeCommit: merges[first.id], workItemId: first.id }]);
   });
 
+  it.each([
+    ["chronological", false],
+    ["reversed", true],
+  ])("starts the diff at the oldest merge when runs finish %s", async (_name, reversed) => {
+    const older = addWorkItem(db, { title: "older" });
+    const newer = addWorkItem(db, { title: "newer" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const merges: Record<string, string> = {};
+    const { exits } = await start(
+      async (ctx) => {
+        const isOlder = ctx.workItem.id === older.id;
+        // The older merge changes package.json, the newer one only src/.
+        const file = isOlder ? "package.json" : "src/newer.ts";
+        if (isOlder && reversed) {
+          // Merge first, but finish last.
+          const state = mergeFile(root, file, "older");
+          merges[older.id] = state.mergeCommit;
+          await gate;
+          return { outcome: "ok", state };
+        }
+        if (!isOlder && reversed) {
+          await waitFor(() => older.id in merges);
+          const state = mergeFile(root, file, "newer");
+          merges[newer.id] = state.mergeCommit;
+          queueMicrotask(release);
+          return { outcome: "ok", state };
+        }
+        if (!isOlder) await waitFor(() => older.id in merges);
+        const state = mergeFile(root, file, ctx.workItem.title);
+        merges[ctx.workItem.id] = state.mergeCommit;
+        return { outcome: "ok", state };
+      },
+      { maxConcurrentRuns: 2 },
+    );
+    await waitFor(() => exits.length > 0);
+    const request = readRestartRequest(stateDir);
+    expect(request?.mergeCommit).toBe(merges[newer.id]);
+    expect(request?.preMergeHead).toBe(sh(root, "rev-parse", `${merges[older.id]}^1`));
+    const changed = sh(root, "diff", "--name-only", request?.preMergeHead ?? "", request?.mergeCommit ?? "");
+    expect(changed.split("\n")).toContain("package.json");
+  });
+
   it("requests no restart when rev-parse fails", async () => {
     addWorkItem(db, { title: "bad" });
     const { exits } = await start(async () => ({

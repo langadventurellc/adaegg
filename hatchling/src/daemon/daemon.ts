@@ -54,6 +54,7 @@ export function createDaemon(deps: DaemonDeps): Daemon {
       const existing = restartPending ?? readRestartRequest(deps.paths.stateDir);
       let request: RestartRequest;
       if (existing) {
+        const ownParent = git(root, "rev-parse", `${mergeCommit}^1`);
         const newer = isAncestor(root, existing.mergeCommit, mergeCommit);
         const [latest, other] = newer
           ? [{ mergeCommit, workItemId: run.workItemId }, existing]
@@ -61,7 +62,8 @@ export function createDaemon(deps: DaemonDeps): Daemon {
         request = {
           mergeCommit: latest.mergeCommit,
           workItemId: latest.workItemId,
-          preMergeHead: existing.preMergeHead,
+          // The oldest covered merge decides where the diff starts, whatever order the runs finish in.
+          preMergeHead: isAncestor(root, ownParent, existing.preMergeHead) ? ownParent : existing.preMergeHead,
           requestedAt: new Date().toISOString(),
           earlier: [
             ...(existing.earlier ?? []),
