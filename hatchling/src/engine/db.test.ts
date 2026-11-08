@@ -31,6 +31,11 @@ describe("openDb", () => {
   it("works on :memory:", () => {
     const db = openDb(":memory:");
     expect(pragma(db, "user_version").user_version).toBe(MIGRATIONS.length);
+    expect(MIGRATIONS.length).toBe(2);
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
+    const names = tables.map((t) => t.name);
+    expect(names).toContain("runs");
+    expect(names).toContain("node_runs");
     db.close();
   });
 });
