@@ -698,12 +698,12 @@ describe("process shutdown", () => {
       `
 import { spawn } from "node:child_process";
 import { runSupervisor } from ${JSON.stringify(new URL("./supervisor.ts", import.meta.url).href)};
-const [root, stateDir, daemon] = process.argv.slice(2);
+const [root, stateDir, daemon, setup = ""] = process.argv.slice(2);
 const none = { write: () => true };
 process.exitCode = await runSupervisor({
   root,
   stateDir,
-  config: { setup: "", baseBranch: "main" },
+  config: { setup, baseBranch: "main" },
   echo: null,
   stdout: none,
   stderr: none,
@@ -723,5 +723,17 @@ process.exitCode = await runSupervisor({
     supervisor.kill("SIGTERM");
     expect(await exited).toBe(0);
     expect(Date.now() - sentAt).toBeLessThan(4000);
+  });
+
+  it("does not wait out the setup kill grace after a completed setup when told to stop", async () => {
+    const runner = join(scriptDir, "run-supervisor.mjs");
+    writeRestartRequest(stateDir, makeRequest(true));
+    const supervisor = nodeSpawn("node", [runner, repo, stateDir, script, "true"], { stdio: "ignore" });
+    const exited = new Promise<number | null>((resolve) => supervisor.on("exit", resolve));
+    await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
+    const sentAt = Date.now();
+    supervisor.kill("SIGTERM");
+    await exited;
+    expect(Date.now() - sentAt).toBeLessThan(2000);
   });
 });

@@ -112,8 +112,20 @@ function defaultRunSetup(root: string, command: string, signal: AbortSignal): Pr
       }
     };
     let grace: ReturnType<typeof setTimeout> | undefined;
-    child.on("error", () => resolve(null));
+    // The shell and its children (npm and its own) all get SIGTERM; the result is reported only once the shell is
+    // gone, and anything still running after the grace period is killed.
+    const onAbort = () => {
+      killGroup("SIGTERM");
+      grace = setTimeout(() => killGroup("SIGKILL"), SETUP_KILL_GRACE_MS);
+      grace.unref();
+    };
+    child.on("error", () => {
+      signal.removeEventListener("abort", onAbort);
+      clearTimeout(grace);
+      resolve(null);
+    });
     child.on("close", (code) => {
+      signal.removeEventListener("abort", onAbort);
       clearTimeout(grace);
       if (signal.aborted) {
         // Whatever the shell left behind in the group must not outlive it.
@@ -122,16 +134,7 @@ function defaultRunSetup(root: string, command: string, signal: AbortSignal): Pr
       }
       resolve(code);
     });
-    signal.addEventListener(
-      "abort",
-      () => {
-        // The shell and its children (npm and its own) all get SIGTERM; the result is reported only once the shell is
-        // gone, and anything still running after the grace period is killed.
-        killGroup("SIGTERM");
-        grace = setTimeout(() => killGroup("SIGKILL"), SETUP_KILL_GRACE_MS);
-      },
-      { once: true },
-    );
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
