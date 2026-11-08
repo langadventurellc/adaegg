@@ -20,6 +20,18 @@ export function git(cwd: string, ...args: string[]): string {
   }
 }
 
+// Runs `git <args> -z` and returns the NUL-separated entries untrimmed, so
+// file names come back as the real paths (git quotes them in newline output).
+export function gitPaths(cwd: string, ...args: string[]): string[] {
+  try {
+    const out = execFileSync("git", [...args, "-z"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return out.split("\0").filter((f) => f !== "");
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? "").trim();
+    throw new GitError(`git ${args.join(" ")} failed: ${stderr}`, stderr);
+  }
+}
+
 // The last `lines` lines of `text`, at most `maxBytes` bytes (keeping the end).
 export function tail(text: string, lines = 200, maxBytes = 20000): string {
   let out = text.split("\n").slice(-lines).join("\n");

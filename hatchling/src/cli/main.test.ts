@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../engine/db.ts";
 import { type CliIo, runCli } from "./main.ts";
 
@@ -24,7 +24,7 @@ beforeEach(() => {
   counter++;
 });
 
-afterAll(() => {
+afterEach(() => {
   rmSync(base, { recursive: true, force: true });
 });
 

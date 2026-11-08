@@ -5,6 +5,7 @@ import {
   GitError,
   getBranchConfig,
   git,
+  gitPaths,
   isAncestor,
   isClean,
   setBranchConfig,
@@ -43,11 +44,9 @@ function findMergeCommit(
   const mergeCommit = incorporatingCommit(root, base, tip);
   const parents = git(root, "rev-list", "--parents", "-n", "1", mergeCommit).split(" ");
   const own = parents.length === 3 && parents[2] === tip;
-  const changedPaths = lines(
-    own
-      ? git(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit)
-      : git(root, "diff", "--name-only", start, tip),
-  );
+  const changedPaths = own
+    ? gitPaths(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit)
+    : gitPaths(root, "diff", "--name-only", start, tip);
   return { mergeCommit, changedPaths };
 }
 
@@ -101,7 +100,7 @@ export const mergeNode = defineNode({
       try {
         git(worktree, "merge", "--no-edit", base);
       } catch {
-        const conflictFiles = lines(git(worktree, "diff", "--name-only", "--diff-filter=U"));
+        const conflictFiles = gitPaths(worktree, "diff", "--name-only", "--diff-filter=U");
         try {
           git(worktree, "merge", "--abort");
         } catch {
@@ -140,7 +139,7 @@ export const mergeNode = defineNode({
     if (mergeCommit === before) {
       return { outcome: "blocked", problem: `${branch} has no commits of its own to merge` };
     }
-    const changedPaths = lines(git(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit));
+    const changedPaths = gitPaths(root, "diff", "--name-only", `${mergeCommit}^1`, mergeCommit);
     return { outcome: "merged", state: { mergeCommit, changedPaths, conflictFiles: [] } };
   },
 });

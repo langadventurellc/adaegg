@@ -170,6 +170,29 @@ describe("merge node", () => {
     expect(existsSync(join(wt, mergeHead))).toBe(false);
   });
 
+  it("reports Unicode and spaced file names as real paths", async () => {
+    const { root, state } = await setup();
+    const wt = state.worktree ?? "";
+    commitFile(wt, "café.txt", "x\n");
+    commitFile(wt, " lead space.txt", "y\n");
+    const first = await mergeNode.run(makeCtx(root, { state }));
+    expect([...(first.state?.changedPaths ?? [])].sort()).toEqual([" lead space.txt", "café.txt"]);
+    const again = await mergeNode.run(makeCtx(root, { state }));
+    expect([...(again.state?.changedPaths ?? [])].sort()).toEqual([" lead space.txt", "café.txt"]);
+  });
+
+  it("reports a Unicode conflict file as its real path", async () => {
+    const { root, state } = await setup();
+    const wt = state.worktree ?? "";
+    commitFile(root, "café.txt", "base\n");
+    sh(wt, "merge", "--no-edit", "main");
+    commitFile(wt, "café.txt", "branch\n");
+    commitFile(root, "café.txt", "main\n");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("conflict");
+    expect(result.state?.conflictFiles).toEqual(["café.txt"]);
+  });
+
   it("is blocked by a dirty main checkout", async () => {
     const { root, state } = await setup();
     commitFile(state.worktree ?? "", "feature.txt", "x\n");
