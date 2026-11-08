@@ -1,0 +1,23 @@
+id: request
+name: Request
+trigger: { type: queue, kind: request }
+start: plan
+nodes:
+  - id: plan
+    type: agent
+    config:
+      cwd: root
+      output: plan
+      model: implement
+      prompt: prompts/plan.md
+      tools: [Read, Glob, Grep]
+      bash: ["git log*", "git show*", "git diff*", "git status*", "ls *"]
+      maxTurns: 40
+      maxBudgetUsd: 2
+  - { id: enqueue, type: enqueue }
+edges:
+  - { from: plan, on: done, to: enqueue }
+  - { from: plan, on: failed, to: fail }
+  - { from: plan, on: blocked, to: fail }
+  - { from: enqueue, on: queued, to: end }
+  - { from: enqueue, on: failed, to: fail }
