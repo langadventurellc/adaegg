@@ -8,7 +8,7 @@ export const ConfigSchema = z.object({
   checks: z.string().default("npm run check"),
   // An empty string skips the setup step.
   setup: z.string().default("npm ci"),
-  checksTimeoutMinutes: z.number().int().positive().default(20),
+  checksTimeoutMinutes: z.number().positive().default(20),
   maxConcurrentRuns: z.number().int().positive().default(1),
 });
 
