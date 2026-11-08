@@ -1,0 +1,98 @@
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
+import { branchNode } from "./branch.ts";
+import { mergeNode } from "./merge.ts";
+import { buildTemplateRepo, copyRepo, makeCtx, sh } from "./test-repo.ts";
+import type { RunState } from "./types.ts";
+
+let template: string;
+beforeAll(() => {
+  template = buildTemplateRepo();
+});
+
+async function setup(): Promise<{ root: string; state: Partial<RunState> }> {
+  const root = copyRepo(template);
+  const result = await branchNode.run(makeCtx(root));
+  return { root, state: result.state ?? {} };
+}
+
+function commitFile(dir: string, name: string, content: string) {
+  writeFileSync(join(dir, name), content);
+  sh(dir, "add", "-A");
+  sh(dir, "commit", "-m", `add ${name}`);
+}
+
+describe("merge node", () => {
+  it("merges the branch into main", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("merged");
+    expect(existsSync(join(root, "feature.txt"))).toBe(true);
+    expect(result.state?.mergeCommit).toBe(sh(root, "rev-parse", "HEAD"));
+    expect(sh(root, "log", "-1", "--format=%s")).toBe("hatch: Add the thing (abcdef12)");
+  });
+
+  it("changedPaths is exactly the files the branch changed", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "a.txt", "a\n");
+    commitFile(state.worktree ?? "", "b.txt", "b\n");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect([...(result.state?.changedPaths ?? [])].sort()).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("is idempotent", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    const first = await mergeNode.run(makeCtx(root, { state }));
+    const second = await mergeNode.run(makeCtx(root, { state }));
+    expect(second.outcome).toBe("merged");
+    expect(second.state?.mergeCommit).toBe(first.state?.mergeCommit);
+    expect(sh(root, "rev-list", "--count", "HEAD")).toBe("3");
+  });
+
+  it("returns moved when base advanced, then merged", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    commitFile(root, "other.txt", "o\n");
+    const moved = await mergeNode.run(makeCtx(root, { state }));
+    expect(moved.outcome).toBe("moved");
+    expect(existsSync(join(state.worktree ?? "", "other.txt"))).toBe(true);
+    const merged = await mergeNode.run(makeCtx(root, { state }));
+    expect(merged.outcome).toBe("merged");
+    expect(merged.state?.changedPaths).toEqual(["feature.txt"]);
+  });
+
+  it("returns conflict and leaves the worktree clean", async () => {
+    const { root, state } = await setup();
+    const wt = state.worktree ?? "";
+    commitFile(wt, "README.md", "branch\n");
+    commitFile(root, "README.md", "main\n");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("conflict");
+    expect(result.state?.conflictFiles).toEqual(["README.md"]);
+    expect(sh(wt, "status", "--porcelain")).toBe("");
+    const mergeHead = sh(wt, "rev-parse", "--git-path", "MERGE_HEAD");
+    expect(existsSync(join(wt, mergeHead))).toBe(false);
+  });
+
+  it("is blocked by a dirty main checkout", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    writeFileSync(join(root, "README.md"), "dirty\n");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("blocked");
+    expect(result.problem).toContain("uncommitted changes");
+  });
+
+  it("is blocked when main is on another branch", async () => {
+    const { root, state } = await setup();
+    commitFile(state.worktree ?? "", "feature.txt", "x\n");
+    sh(root, "checkout", "-b", "other");
+    const result = await mergeNode.run(makeCtx(root, { state }));
+    expect(result.outcome).toBe("blocked");
+    expect(result.problem).toContain("'other'");
+    expect(result.problem).toContain("'main'");
+  });
+});
