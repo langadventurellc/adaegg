@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, spawnSync } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -61,7 +61,8 @@ export type SupervisorDeps = {
   // Where the daemon's output is echoed; defaults to stdout when it is a terminal.
   echo?: Writer | null;
   // Returns the command's exit status (null when it was killed or could not start); anything but 0 is a failure.
-  runSetup?: (root: string, command: string) => number | null;
+  // The signal is aborted when the supervisor is told to stop; the command must then be terminated.
+  runSetup?: (root: string, command: string, signal: AbortSignal) => number | null | Promise<number | null>;
   // Registers a handler for SIGINT/SIGTERM and returns a function that removes it.
   signals?: (handler: () => void) => () => void;
   // Called when a daemon started after a self-change did not come up healthy; it has exited by then.
@@ -94,8 +95,14 @@ function defaultSpawn(cwd: string, onOutput: (chunk: string) => void): ChildHand
   };
 }
 
-function defaultRunSetup(root: string, command: string): number | null {
-  return spawnSync("sh", ["-c", command], { cwd: root, stdio: "inherit" }).status;
+function defaultRunSetup(root: string, command: string, signal: AbortSignal): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve(null);
+    // Aborting the signal sends SIGTERM to the command.
+    const child = nodeSpawn("sh", ["-c", command], { cwd: root, stdio: "inherit", signal });
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => resolve(code));
+  });
 }
 
 function defaultSignals(handler: () => void): () => void {
@@ -136,6 +143,9 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
 
   const openDatabase = deps.openDb ?? (() => openDb(dbPath(root, deps.env)));
 
+  let stopping = false;
+  const stopSetup = new AbortController();
+
   const packagesChanged = (request: RestartRequest): boolean => {
     try {
       const files = git(root, "diff", "--name-only", request.preMergeHead, request.mergeCommit).split("\n");
@@ -148,6 +158,8 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
   // Reverts the merge of a restart request whose daemon did not come up healthy. Never `git reset`: the revert is a
   // new commit, so nothing but the merge's changes is undone.
   const rollback = async (held: RestartRequest, tail: string): Promise<"retry" | "exit"> => {
+    // Told to stop: leave the request in place for the next start.
+    if (stopping) return "retry";
     // The request on disk may have grown since the supervisor read it (a later self-change added its merge).
     let request = held;
     try {
@@ -234,8 +246,9 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
       return "exit";
     }
     if (deps.config.setup !== "" && packagesChanged(request)) {
-      const status = runSetup(root, deps.config.setup);
+      const status = await runSetup(root, deps.config.setup, stopSetup.signal);
       if (status !== 0) {
+        if (stopping) return "retry";
         stderr.write(`setup failed after the revert (${describeStatus(status)}): ${deps.config.setup}\n`);
         return "exit";
       }
@@ -246,7 +259,6 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
 
   const onProbationFailed = deps.onProbationFailed ?? rollback;
 
-  let stopping = false;
   let current: { child: ChildHandle; exited: Promise<void>; isExited: () => boolean } | null = null;
 
   const terminate = async (c: NonNullable<typeof current>) => {
@@ -270,6 +282,7 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
   const unsubscribe = signals(() => {
     if (stopping) return;
     stopping = true;
+    stopSetup.abort();
     if (current) void terminate(current);
   });
 
@@ -280,7 +293,8 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
       deleteReady(stateDir);
       const request = readRestartRequest(stateDir);
       if (request && deps.config.setup !== "" && packagesChanged(request)) {
-        const status = runSetup(root, deps.config.setup);
+        const status = await runSetup(root, deps.config.setup, stopSetup.signal);
+        if (stopping) break;
         if (status !== 0) {
           // The new code cannot start without its dependencies, so this is a failed start: roll the merge back.
           const message = `setup failed (${describeStatus(status)}): ${deps.config.setup}\n`;

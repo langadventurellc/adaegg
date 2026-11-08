@@ -511,6 +511,68 @@ describe("rollback", () => {
     expect(h.spawned).toHaveLength(2);
   });
 
+  // A setup command that never finishes by itself: it ends (status null) only when the supervisor aborts it.
+  const hangingSetup = (started: () => void, aborted: () => void) => (_r: string, _c: string, signal: AbortSignal) =>
+    new Promise<number | null>((resolve) => {
+      started();
+      signal.addEventListener("abort", () => {
+        aborted();
+        resolve(null);
+      });
+    });
+
+  it("stops while setup runs before the start: aborts it, spawns nothing, reverts nothing", async () => {
+    const request = writeRequest(true);
+    let began = false;
+    let abortedSetup = false;
+    const h = harness(["healthy"], {
+      config: { setup: "npm ci", baseBranch: "main" },
+      runSetup: hangingSetup(
+        () => {
+          began = true;
+        },
+        () => {
+          abortedSetup = true;
+        },
+      ),
+    });
+    const done = runSupervisor(h.deps);
+    await waitFor(() => began, "setup to start");
+    h.signal();
+    expect(await done).toBe(0);
+    expect(abortedSetup).toBe(true);
+    expect(h.spawned).toHaveLength(0);
+    expect(revertCommits()).toBe(0);
+    expect(readFileSync(restartPath(stateDir), "utf8")).toContain(request.mergeCommit);
+    expect(itemStatus().status).toBe("done");
+  });
+
+  it("stops while setup runs after a rollback: aborts it and does not start another daemon", async () => {
+    makeMerge("broken", true);
+    let calls = 0;
+    let began = false;
+    let abortedSetup = false;
+    const hang = hangingSetup(
+      () => {
+        began = true;
+      },
+      () => {
+        abortedSetup = true;
+      },
+    );
+    const h = harness(["exit:75", "by-repo"], {
+      config: { setup: "npm ci", baseBranch: "main" },
+      runSetup: (r, c, s) => (++calls === 1 ? 0 : hang(r, c, s)),
+    });
+    const done = runSupervisor(h.deps);
+    await waitFor(() => began, "the setup after the revert to start");
+    h.signal();
+    expect(await done).toBe(0);
+    expect(abortedSetup).toBe(true);
+    expect(revertCommits()).toBe(1);
+    expect(h.spawned).toHaveLength(2);
+  });
+
   it.each([
     ["another branch", () => sh(repo, "checkout", "-b", "elsewhere")],
     ["a detached HEAD", () => sh(repo, "checkout", "--detach")],
