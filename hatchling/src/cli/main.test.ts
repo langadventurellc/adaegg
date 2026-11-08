@@ -100,6 +100,12 @@ describe("add", () => {
     expect(shown.blockedBy[0].startsWith(a)).toBe(true);
   });
 
+  it.each([["--priority", "-1"], ["--priority=-1"]])("stores a negative priority given as %j", async (...flag) => {
+    const id = await add(["later", ...flag]);
+    expect(JSON.parse((await hatch(["show", id, "--json"])).out).priority).toBe(-1);
+    expect((await hatch(["list"])).out).toContain("p-1");
+  });
+
   it("accepts several --blocked-by", async () => {
     const a = await add(["A"]);
     const b = await add(["B"]);

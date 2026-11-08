@@ -114,7 +114,13 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
 
   switch (command) {
     case "add": {
-      const { values, positionals } = parse(args, {
+      // parseArgs reads a separate `-1` as an option, so join it to its flag.
+      const joined = args.flatMap((arg, i) => {
+        if (/^-\d+$/.test(arg) && args[i - 1] === "--priority") return [];
+        if (arg === "--priority" && /^-\d+$/.test(args[i + 1] ?? "")) return [`--priority=${args[i + 1]}`];
+        return [arg];
+      });
+      const { values, positionals } = parse(joined, {
         file: { type: "string" },
         "blocked-by": { type: "string", multiple: true },
         parent: { type: "string" },
