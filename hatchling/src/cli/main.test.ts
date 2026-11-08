@@ -162,6 +162,58 @@ describe("list, show, cancel, retry, status", () => {
   });
 });
 
+// Records a finished run with two node runs for the item, straight in the database.
+function seedRun(itemShort: string, runId: string, startedAt: string) {
+  const db = openDb(join(state, "hatch.db"));
+  const itemId = (db.prepare("SELECT id FROM work_items WHERE id LIKE ?").get(`${itemShort}%`) as { id: string }).id;
+  db.prepare(
+    "INSERT INTO runs (id, work_item_id, workflow_id, status, current_node, state, started_at) VALUES (?, ?, 'wf', 'running', 'checks', '{}', ?)",
+  ).run(runId, itemId, startedAt);
+  db.prepare(
+    "INSERT INTO node_runs (run_id, node_id, attempt, outcome, problem, cost_usd, started_at) VALUES (?, 'branch', 1, 'ok', NULL, 0.5, ?)",
+  ).run(runId, startedAt);
+  db.prepare(
+    "INSERT INTO node_runs (run_id, node_id, attempt, outcome, problem, started_at) VALUES (?, 'checks', 1, 'failed', 'tests broke', ?)",
+  ).run(runId, startedAt);
+  db.close();
+  return itemId;
+}
+
+describe("runs", () => {
+  it("shows an item's runs and node runs in text and json", async () => {
+    const a = await add(["First"]);
+    seedRun(a, "11111111-aaaa", "2026-01-01T00:00:00.000Z");
+    const text = (await hatch(["show", a])).out;
+    expect(text).toContain("runs:\n  11111111  wf  running  checks\n");
+    expect(text).toContain("    branch  attempt 1  ok  problem: -  cost: $0.5000");
+    expect(text).toContain("    checks  attempt 1  failed  problem: tests broke  cost: -");
+    const json = JSON.parse((await hatch(["show", a, "--json"])).out);
+    expect(json.runs).toHaveLength(1);
+    expect(json.runs[0]).toMatchObject({ id: "11111111-aaaa", workflowId: "wf", currentNode: "checks" });
+    expect(json.runs[0].nodeRuns.map((n: { nodeId: string }) => n.nodeId)).toEqual(["branch", "checks"]);
+  });
+
+  it("shows no runs section for an item without runs", async () => {
+    const a = await add(["First"]);
+    expect((await hatch(["show", a])).out).not.toContain("runs:");
+    expect(JSON.parse((await hatch(["show", a, "--json"])).out).runs).toEqual([]);
+  });
+
+  it("lists runs newest first, one line each, and honours --limit", async () => {
+    const a = await add(["First"]);
+    seedRun(a, "11111111-aaaa", "2026-01-01T00:00:00.000Z");
+    seedRun(a, "22222222-bbbb", "2026-01-02T00:00:00.000Z");
+    const r = await hatch(["runs"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toBe(`22222222  wf  running  checks  ${a}\n11111111  wf  running  checks  ${a}\n`);
+    expect((await hatch(["runs", "--limit", "1"])).out).toBe(`22222222  wf  running  checks  ${a}\n`);
+  });
+
+  it.each(["0", "-1", "1.5", "abc"])("rejects --limit %s", async (value) => {
+    expectOneLineError(await hatch(["runs", `--limit=${value}`]), /--limit must be a positive integer/);
+  });
+});
+
 describe("errors", () => {
   it("rejects an unknown id", async () => {
     await add(["A"]);
