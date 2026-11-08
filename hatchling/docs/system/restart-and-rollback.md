@@ -30,7 +30,7 @@ SIGINT/SIGTERM to the supervisor send SIGTERM to the daemon, wait for it (then k
 
 ## Probation
 
-While `restart.json` exists the new daemon is on probation. It must write `ready.json` within 30s and then stay up for 60s (the defaults). Once stable, the supervisor deletes `restart.json`. A daemon that exits at any point on probation, or is not ready in time, fails probation and the supervisor rolls back.
+While `restart.json` exists the new daemon is on probation. It must write `ready.json` within 30s and then stay up for 60s (the defaults). Once stable, the supervisor deletes `restart.json`: it moves the file aside (to a private `restart.json.consuming`), compares and deletes only that copy, and puts a different request back without overwriting one written in the meantime, so a request written while it clears the old one is never lost. A daemon that exits at any point on probation, or is not ready in time, fails probation and the supervisor rolls back.
 
 ## Rollback
 
