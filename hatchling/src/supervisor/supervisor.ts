@@ -1,7 +1,9 @@
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { Config } from "../engine/config.ts";
+import { openDb } from "../engine/db.ts";
 import {
   deleteReady,
   deleteRestartRequest,
@@ -10,7 +12,9 @@ import {
   readReady,
   readRestartRequest,
 } from "../engine/lifecycle.ts";
-import { git } from "../engine/nodes/git.ts";
+import { git, isClean } from "../engine/nodes/git.ts";
+import { dbPath } from "../engine/paths.ts";
+import { markReverted } from "../engine/store.ts";
 
 export type ChildHandle = {
   pid: number;
@@ -60,7 +64,11 @@ export type SupervisorDeps = {
   // Registers a handler for SIGINT/SIGTERM and returns a function that removes it.
   signals?: (handler: () => void) => () => void;
   // Called when a daemon started after a self-change did not come up healthy; it has exited by then.
+  // Defaults to reverting the merge (see `rollback`).
   onProbationFailed?: (request: RestartRequest, tail: string) => Promise<"retry" | "exit">;
+  // Opens the work item database for marking the reverted item; defaults to the repo's database.
+  openDb?: () => DatabaseSync;
+  env?: NodeJS.ProcessEnv;
 };
 
 function defaultSpawn(cwd: string, onOutput: (chunk: string) => void): ChildHandle {
@@ -123,13 +131,71 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
   };
   const lastLines = (n: number): string => buffer.replace(/\n$/, "").split("\n").slice(-n).join("\n");
 
-  const onProbationFailed =
-    deps.onProbationFailed ??
-    (async (_request: RestartRequest, _tail: string) => {
-      // TODO(rollback): the next task replaces this with reverting the merge and retrying.
-      stderr.write("the new daemon did not come up healthy after the self-change merge\n");
-      return "exit" as const;
-    });
+  const openDatabase = deps.openDb ?? (() => openDb(dbPath(root, deps.env)));
+
+  const packagesChanged = (request: RestartRequest): boolean => {
+    try {
+      const files = git(root, "diff", "--name-only", request.preMergeHead, request.mergeCommit).split("\n");
+      return files.some((f) => f === "package.json" || f === "package-lock.json");
+    } catch {
+      return true;
+    }
+  };
+
+  // Reverts the merge of a restart request whose daemon did not come up healthy. Never `git reset`: the revert is a
+  // new commit, so nothing but the merge's changes is undone.
+  const rollback = async (request: RestartRequest, tail: string): Promise<"retry" | "exit"> => {
+    stderr.write(`the new daemon did not come up healthy after merge ${request.mergeCommit}; rolling it back\n`);
+    if (!isClean(root)) {
+      stderr.write(
+        `the checkout ${root} has uncommitted changes, so the merge was not reverted:\n${git(root, "status", "--short")}\n` +
+          `Commit or discard them, then revert ${request.mergeCommit} by hand (git revert -m 1 ${request.mergeCommit}). ` +
+          `Daemon log: ${logFile}\n`,
+      );
+      return "exit";
+    }
+    // Delete the request before reverting, so a supervisor killed mid-rollback and restarted reverts nothing again.
+    deleteRestartRequest(stateDir);
+    try {
+      const parents = git(root, "rev-list", "--parents", "-n", "1", request.mergeCommit).split(" ").length - 1;
+      git(root, "revert", ...(parents > 1 ? ["-m", "1"] : []), "--no-edit", request.mergeCommit);
+    } catch (err) {
+      try {
+        git(root, "revert", "--abort");
+      } catch {
+        // nothing to abort
+      }
+      stderr.write(`reverting ${request.mergeCommit} failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      return "exit";
+    }
+    if (deps.config.setup !== "" && packagesChanged(request)) {
+      const status = runSetup(root, deps.config.setup);
+      if (status !== undefined && status !== null && status !== 0) {
+        stderr.write(`setup failed (exit ${status}): ${deps.config.setup}\n`);
+        return "exit";
+      }
+    }
+    try {
+      const db = openDatabase();
+      try {
+        markReverted(
+          db,
+          request.workItemId,
+          `Its merge stopped the hatchling from restarting, so it was reverted. Last daemon output: ${tail}`,
+        );
+      } finally {
+        db.close();
+      }
+    } catch (err) {
+      stderr.write(
+        `could not mark ${request.workItemId} as reverted: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+    stderr.write(`reverted ${request.mergeCommit}; starting the hatchling again\n`);
+    return "retry";
+  };
+
+  const onProbationFailed = deps.onProbationFailed ?? rollback;
 
   let stopping = false;
   let current: { child: ChildHandle; exited: Promise<void>; isExited: () => boolean } | null = null;
@@ -149,15 +215,6 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
     stopping = true;
     if (current) void terminate(current);
   });
-
-  const packagesChanged = (request: RestartRequest): boolean => {
-    try {
-      const files = git(root, "diff", "--name-only", request.preMergeHead, request.mergeCommit).split("\n");
-      return files.some((f) => f === "package.json" || f === "package-lock.json");
-    } catch {
-      return true;
-    }
-  };
 
   const crashes: number[] = [];
 
