@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ConfigSchema } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
+import { restartPath } from "../engine/lifecycle.ts";
 import { defineNode, type NodeContext, type NodeResult } from "../engine/nodes/types.ts";
 import { createRun, getRun, listRuns } from "../engine/runs.ts";
-import { addWorkItem, getWorkItem } from "../engine/store.ts";
+import { addWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
 import type { Workflow } from "../engine/workflows/schema.ts";
 import { createDaemon, type Daemon } from "./daemon.ts";
 import { loadWorkflowsOrReport } from "./main.ts";
@@ -56,14 +57,20 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function make(workflow: Workflow, nodes: Record<string, ReturnType<typeof fake>>, maxConcurrentRuns = 1) {
+function make(
+  workflow: Workflow,
+  nodes: Record<string, ReturnType<typeof fake>>,
+  maxConcurrentRuns = 1,
+  extra: { now?: () => Date; stateDir?: string } = {},
+) {
   const daemon = createDaemon({
     db,
     workflows: [workflow],
     nodeTypes: nodes,
     appConfig: ConfigSchema.parse({ schema: 1, maxConcurrentRuns }),
-    paths: { root: "/r", stateDir: "/r/.adaegg" },
+    paths: { root: "/r", stateDir: extra.stateDir ?? "/r/.adaegg" },
     tickMs: 10_000,
+    ...(extra.now ? { now: extra.now } : {}),
   });
   daemons.push(daemon);
   return daemon;
@@ -165,6 +172,39 @@ describe("daemon", () => {
     await waitFor(() => status(item.id) === "done");
     expect(getRun(db, (run as { id: string }).id).status).toBe("succeeded");
     expect(listRuns(db)).toHaveLength(1);
+  });
+
+  function cronWf(): Workflow {
+    return { ...wf(["a"]), id: "daily", name: "Daily", trigger: { type: "cron", schedule: "17 3 * * *" } };
+  }
+
+  it("fires a due cron workflow, claims the item and runs it", async () => {
+    let clock = new Date(2026, 0, 5, 10, 0);
+    const daemon = make(cronWf(), { a: fake(() => ({ outcome: "ok" })) }, 1, { now: () => clock });
+    await daemon.tick();
+    expect(listRuns(db)).toHaveLength(0);
+    clock = new Date(2026, 0, 6, 3, 17);
+    await daemon.tick();
+    await waitFor(() => listRuns(db).length === 1 && listRuns(db)[0]?.status === "succeeded");
+    const [item] = listWorkItems(db);
+    expect(item?.kind).toBe("daily");
+    expect(item?.title).toBe("Daily");
+    expect(item?.status).toBe("done");
+  });
+
+  it("neither fires nor claims while a restart is pending", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "adaegg-daemon-state-"));
+    tempDirs.push(stateDir);
+    writeFileSync(restartPath(stateDir), "{}");
+    let clock = new Date(2026, 0, 5, 10, 0);
+    const queued = addWorkItem(db, { title: "waiting", kind: "daily" });
+    const daemon = make(cronWf(), { a: fake(() => ({ outcome: "ok" })) }, 1, { now: () => clock, stateDir });
+    await daemon.tick();
+    clock = new Date(2026, 0, 6, 3, 17);
+    await daemon.tick();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM schedules").get()).toEqual({ n: 0 });
+    expect(listRuns(db)).toHaveLength(0);
+    expect(status(queued.id)).toBe("queued");
   });
 
   it("refuses to start on an invalid workflow directory, naming every problem", () => {

@@ -1,23 +1,47 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { nextRun, parseCron } from "../cron.ts";
 import type { NodeRegistry } from "../nodes/types.ts";
 import { type Workflow, WorkflowSchema } from "./schema.ts";
 
 const TERMINALS = ["end", "fail"];
+const TRIGGER_TYPES = ["queue", "cron"];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function validateWorkflow(raw: unknown, nodeTypes: NodeRegistry): { workflow?: Workflow; problems: string[] } {
-  const parsed = WorkflowSchema.safeParse(raw);
+  const problems: string[] = [];
+  // An unknown trigger type would only fail the union with a generic message: report it readably, then parse the rest
+  // with a stand-in trigger so the other problems in the file still show.
+  let candidate = raw;
+  const rawTrigger = isRecord(raw) ? raw.trigger : undefined;
+  if (isRecord(rawTrigger) && typeof rawTrigger.type === "string" && !TRIGGER_TYPES.includes(rawTrigger.type)) {
+    problems.push(`unknown trigger type '${rawTrigger.type}' (supported: 'queue', 'cron')`);
+    candidate = { ...(raw as Record<string, unknown>), trigger: { type: "queue", kind: "unknown" } };
+  }
+  const parsed = WorkflowSchema.safeParse(candidate);
   if (!parsed.success) {
     return {
-      problems: parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`),
+      problems: [
+        ...problems,
+        ...parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`),
+      ],
     };
   }
   const workflow = parsed.data;
-  const problems: string[] = [];
 
-  if (workflow.trigger.type !== "queue") {
-    problems.push(`unknown trigger type '${workflow.trigger.type}' (only 'queue' is supported)`);
+  if (workflow.trigger.type === "cron") {
+    try {
+      const schedule = parseCron(workflow.trigger.schedule);
+      if (nextRun(schedule, new Date()) === null) {
+        problems.push(`trigger.schedule '${workflow.trigger.schedule}' never runs`);
+      }
+    } catch (err) {
+      problems.push(`trigger.schedule: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   const types = new Map<string, string>();
@@ -112,6 +136,16 @@ export function loadWorkflows(dir: string, nodeTypes: NodeRegistry): Workflow[] 
       errors.push(`${file}:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
     } else if (workflow) {
       workflows.push(workflow);
+    }
+  }
+
+  // A cron workflow claims items of kind = its id, so an id equal to a queue workflow's kind would steal that queue.
+  const queueKinds = new Set(workflows.flatMap((w) => (w.trigger.type === "queue" ? [w.trigger.kind] : [])));
+  for (const w of workflows) {
+    if (w.trigger.type === "cron" && queueKinds.has(w.id)) {
+      errors.push(
+        `${idFiles.get(w.id)}:\n  - cron workflow id '${w.id}' equals the kind of a queue workflow (it would steal that queue); rename the workflow`,
+      );
     }
   }
 

@@ -130,9 +130,36 @@ describe("loadWorkflows", () => {
   });
 
   it("rejects an unknown trigger type", () => {
-    expect(problemsOf(valid.replace("type: queue", "type: cron"))).toContain(
-      "  - unknown trigger type 'cron' (only 'queue' is supported)",
+    expect(problemsOf(valid.replace("type: queue", "type: webhook"))).toContain(
+      "  - unknown trigger type 'webhook' (supported: 'queue', 'cron')",
     );
+  });
+
+  const cronWorkflow = valid.replace(
+    "trigger: { type: queue, kind: item }",
+    'trigger: { type: cron, schedule: "17 3 * * *" }',
+  );
+
+  it("loads a cron workflow", () => {
+    writeFileSync(join(dir, "c.yaml"), cronWorkflow);
+    const [workflow] = loadWorkflows(dir, nodeTypes);
+    expect(workflow?.trigger).toEqual({ type: "cron", schedule: "17 3 * * *" });
+  });
+
+  it("reports a bad schedule with the field", () => {
+    writeFileSync(join(dir, "c.yaml"), cronWorkflow.replace("17 3 * * *", "60 * * * *"));
+    expect(() => loadWorkflows(dir, nodeTypes)).toThrow(/c\.yaml:\n {2}- trigger\.schedule: .*minute/);
+  });
+
+  it("rejects a schedule that never runs", () => {
+    const problems = problemsOf(cronWorkflow.replace("17 3 * * *", "0 0 31 2 *"));
+    expect(problems.some((p) => p.includes("never runs"))).toBe(true);
+  });
+
+  it("rejects a cron workflow whose id equals a queue workflow's kind", () => {
+    writeFileSync(join(dir, "a.yaml"), valid);
+    writeFileSync(join(dir, "b.yaml"), cronWorkflow.replace("id: example", "id: item"));
+    expect(() => loadWorkflows(dir, nodeTypes)).toThrow(/b\.yaml:\n {2}- cron workflow id 'item' equals the kind/);
   });
 
   it("rejects a non-positive max", () => {
@@ -145,13 +172,16 @@ describe("loadWorkflows", () => {
   });
 
   it("reports every problem in one file", () => {
-    const problems = problemsOf(valid.replace("start: branch", "start: nope").replace("type: queue", "type: cron"));
+    const problems = problemsOf(valid.replace("start: branch", "start: nope").replace("type: queue", "type: webhook"));
     expect(problems).toHaveLength(2);
   });
 
   it("reports problems from several files with their names", () => {
     writeFileSync(join(dir, "a.yaml"), valid.replace("start: branch", "start: nope"));
-    writeFileSync(join(dir, "b.yaml"), valid.replace("id: example", "id: other").replace("type: queue", "type: cron"));
+    writeFileSync(
+      join(dir, "b.yaml"),
+      valid.replace("id: example", "id: other").replace("type: queue", "type: webhook"),
+    );
     let message = "";
     try {
       loadWorkflows(dir, nodeTypes);
@@ -161,7 +191,7 @@ describe("loadWorkflows", () => {
     expect(message).toContain(`${join(dir, "a.yaml")}:`);
     expect(message).toContain("start node 'nope' does not exist");
     expect(message).toContain(`${join(dir, "b.yaml")}:`);
-    expect(message).toContain("unknown trigger type 'cron'");
+    expect(message).toContain("unknown trigger type 'webhook'");
   });
 
   it("rejects duplicate workflow ids across files", () => {
