@@ -108,6 +108,15 @@ export function branchStart(cwd: string, branch: string, base: string): string {
   return getBranchConfig(cwd, branch, "hatchStart") ?? git(cwd, "merge-base", branch, base);
 }
 
+// Commits everything in `dir` (`git add -A`) when there is anything to commit.
+// Returns whether it made a commit, so calling it twice is safe.
+export function commitAll(dir: string, message: string): boolean {
+  if (git(dir, "status", "--porcelain") === "") return false;
+  git(dir, "add", "-A");
+  git(dir, "commit", "-m", message);
+  return true;
+}
+
 export type ShellResult = { ok: boolean; output: string; timedOut: boolean };
 
 // Runs a command through the shell; kills its process group on timeout or abort.

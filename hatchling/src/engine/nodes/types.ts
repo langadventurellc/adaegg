@@ -33,6 +33,11 @@ export type NodeResult = {
 
 export type NodeContext<C> = {
   workItem: WorkItem;
+  runId: string;
+  // The id of this node in the workflow.
+  nodeId: string;
+  // Which attempt of this node in the run this is, starting at 1.
+  attempt: number;
   state: RunState;
   config: C;
   paths: { root: string; stateDir: string };
