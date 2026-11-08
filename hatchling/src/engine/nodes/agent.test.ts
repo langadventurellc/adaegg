@@ -77,7 +77,12 @@ describe("buildPrompt", () => {
 
   it("has the role, then the work item, and nothing else when the state is empty", () => {
     const text = buildPrompt("Role text\n", item, state);
-    expect(text).toBe("Role text\n\n# Work item: Add it\n\nDo the thing.\n");
+    expect(text).toBe("Role text\n\n# Work item: Add it\n\nWork item id: abcdef1234567890\n\nDo the thing.\n");
+  });
+
+  it("names the base branch when the run has one", () => {
+    const text = buildPrompt("Role", item, RunStateSchema.parse({ base: "main" }));
+    expect(text).toContain("Work item id: abcdef1234567890\nBase branch: main\n\nDo the thing.");
   });
 
   it("adds check output, findings and conflicts in that order", () => {
