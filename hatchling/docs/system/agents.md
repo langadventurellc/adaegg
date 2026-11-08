@@ -16,7 +16,7 @@ As for every node, a workflow needs an edge for each outcome.
 | Key | Meaning |
 | --- | --- |
 | `prompt` | Path of the role prompt, relative to the repo root, inside `prompts/`. A path that escapes `prompts/` makes the node `blocked`. |
-| `model` | `implement` or `review`: a key of `models` in `adaegg.json`. The alias (default `sonnet` for both) is looked up when the node runs, so changing `adaegg.json` takes effect for the next node. |
+| `model` | `implement` or `review`: a key of `models` in `adaegg.json`. The alias (default `sonnet` for both) comes from the config the daemon loads once at startup, so after changing `models` in `adaegg.json` restart the daemon. |
 | `tools` | Tool names to allow (`Read`, `Edit`, …). |
 | `bash` | Bash command patterns to allow. Each becomes `Bash(<pattern>)`, for example `git *`. |
 | `deny` | Rules to deny, written as the SDK does (`Bash(git push*)`). |
@@ -58,4 +58,4 @@ Each attempt appends JSON lines to `<state dir>/logs/<first 8 characters of the 
 
 ## Commit guard
 
-With `commit: true`, after the agent reports `done` the node checks the worktree. If `git status --porcelain` is not empty it runs `git add -A` and commits with `hatch: <title> (<id8>)`. If the branch tip is still at its `hatchStart` commit, so it has no commits of its own, the outcome is `failed` with the problem `the implement step made no changes`. Running the node twice is safe: a clean worktree makes no commit. The guard does not clear `checkOutput`, `findings` or `conflictFiles`.
+With `commit: true`, after the agent reports `done` the node checks the worktree. If `git status --porcelain` is not empty it runs `git add -A` and commits with `hatch: <title> (<id8>)`. If `git rev-list --count --no-merges <base>..HEAD` is 0, so the branch has no commits of its own (merging an advanced base into an untouched branch adds none, and commits already in base do not count), the outcome is `failed` with the problem `the implement step made no changes`. Running the node twice is safe: a clean worktree makes no commit. The guard does not clear `checkOutput`, `findings` or `conflictFiles`.

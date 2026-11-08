@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { WorkItem } from "../store.ts";
-import { branchStart, commitAll, git } from "./git.ts";
+import { commitAll, git } from "./git.ts";
 import { defineNode, type NodeContext, type NodeResult, type RunState } from "./types.ts";
 
 export type QueryFn = typeof sdkQuery;
@@ -132,9 +132,9 @@ function implementGuard(ctx: NodeContext<AgentConfig>, worktree: string): NodeRe
   const id8 = ctx.workItem.id.slice(0, 8);
   commitAll(worktree, `hatch: ${ctx.workItem.title} (${id8})`);
   if (!branch || !base) return { outcome: "blocked", problem: "no branch or base in the run state" };
-  const tip = git(worktree, "rev-parse", "HEAD");
-  const start = git(ctx.paths.root, "rev-parse", branchStart(ctx.paths.root, branch, base));
-  if (tip === start) return { outcome: "failed", problem: "the implement step made no changes" };
+  // Commits of the branch's own: merging base into an untouched branch adds none.
+  const ahead = Number(git(worktree, "rev-list", "--count", "--no-merges", `${base}..HEAD`));
+  if (ahead === 0) return { outcome: "failed", problem: "the implement step made no changes" };
   return null;
 }
 
@@ -145,7 +145,10 @@ function createNode(type: "agent" | "review", query: QueryFn) {
     outcomes: verdictType ? ["approve", "changes", "failed", "blocked"] : ["done", "failed", "blocked"],
     configSchema: verdictType
       ? AgentConfigSchema.transform((c) => ({ ...c, output: "verdict" as const }))
-      : AgentConfigSchema,
+      : AgentConfigSchema.refine((c) => c.output === "text", {
+          message: 'output "verdict" needs the review node type',
+          path: ["output"],
+        }),
     async run(ctx): Promise<NodeResult> {
       const { config } = ctx;
       const worktree = ctx.state.worktree;
@@ -213,7 +216,9 @@ function createNode(type: "agent" | "review", query: QueryFn) {
         : {};
       const resultText = typeof result?.result === "string" ? result.result : "";
 
-      if (authFailed || (result?.is_error === true && /authenticat|not logged in|invalid api key/i.test(resultText))) {
+      const errorText = Array.isArray(result?.errors) ? result.errors.map(String).join("\n") : "";
+      const authPattern = /authenticat|not logged in|invalid api key/i;
+      if (authFailed || (result?.is_error === true && authPattern.test(`${resultText}\n${errorText}`))) {
         return { outcome: "blocked", problem: AUTH_PROBLEM, ...spent };
       }
       if (!result) return { outcome: "failed", problem: "the agent ended without a result" };

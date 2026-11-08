@@ -208,6 +208,59 @@ describe("implement workflow end to end", () => {
     expect(existsSync(join(root, "feature.test.txt"))).toBe(true);
   });
 
+  it("sends a merge conflict back to implement, which merges base again and resolves it", async () => {
+    const calls: Call[] = [];
+    const daemon = makeDaemon(
+      "true",
+      fakeQuery(calls, (call, nth, cwd) => {
+        if (call.role === "review") {
+          if (nth === 1) {
+            // Base moves under the branch while it is being reviewed.
+            writeFileSync(join(root, "shared.txt"), "from main\n");
+            sh(root, "add", "-A");
+            sh(root, "commit", "-m", "main edits shared.txt");
+          }
+          return [verdict("approve")];
+        }
+        if (nth === 1) {
+          writeFileSync(join(cwd, "shared.txt"), "from branch\n");
+          sh(cwd, "add", "-A");
+          sh(cwd, "commit", "-m", "branch adds shared.txt");
+        } else {
+          // The failed merge was aborted: the worktree is clean and the agent merges base itself.
+          expect(sh(cwd, "status", "--porcelain")).toBe("");
+          try {
+            sh(cwd, "merge", "--no-edit", "main");
+          } catch {
+            // conflicts, as expected
+          }
+          writeFileSync(join(cwd, "shared.txt"), "from main\nfrom branch\n");
+          sh(cwd, "add", "-A");
+          sh(cwd, "commit", "-m", "resolve the merge");
+        }
+        return [result()];
+      }),
+    );
+    const { item, run, nodes } = await runItem(daemon);
+
+    expect(getWorkItem(db, item.id).status).toBe("done");
+    expect(nodes.map(([n, o]) => `${n}:${o}`)).toEqual([
+      "branch:ok",
+      "implement:done",
+      "checks:passed",
+      "review:approve",
+      "merge:conflict",
+      "implement:done",
+      "checks:passed",
+      "review:approve",
+      "merge:merged",
+    ]);
+    expect(run.state.edgeCounts["merge:conflict"]).toBe(1);
+    const second = calls.filter((c) => c.role === "implement")[1];
+    expect(second?.prompt).toContain("# Merge conflicts\n\n- shared.txt");
+    expect(readFileSync(join(root, "shared.txt"), "utf8")).toBe("from main\nfrom branch\n");
+  });
+
   it("fails the run when checks fail a third time", async () => {
     const calls: Call[] = [];
     const daemon = makeDaemon(

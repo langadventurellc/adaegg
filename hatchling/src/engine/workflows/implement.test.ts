@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -34,6 +35,19 @@ describe("the shipped implement workflow", () => {
     };
     expect(unbounded.filter((e) => reaches(e.to, e.from))).toEqual([]);
     expect(edges.length - unbounded.length).toBeGreaterThan(0);
+  });
+
+  it("rejects verdict output on a plain agent node when loading", () => {
+    const dir = mkdtempSync(join(tmpdir(), "adaegg-verdict-"));
+    try {
+      const shipped = readFileSync(join(hatchlingRoot, "workflows", "implement.yaml"), "utf8");
+      const broken = shipped.replace("      commit: true\n", "      commit: true\n      output: verdict\n");
+      expect(broken).not.toBe(shipped);
+      writeFileSync(join(dir, "implement.yaml"), broken);
+      expect(() => loadWorkflows(dir, builtinNodeTypes)).toThrow(/verdict/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("has non-empty prompt files for its agent nodes", () => {

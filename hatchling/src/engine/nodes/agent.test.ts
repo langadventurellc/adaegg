@@ -221,6 +221,29 @@ describe("agent node results", () => {
     expect(result.problem).toBe(AUTH_PROBLEM);
   });
 
+  it("gives blocked when the login problem is in the result's errors", async () => {
+    const { ctx } = setup();
+    const result = await runAgent(
+      ctx,
+      fake([
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          errors: ["Not logged in"],
+          total_cost_usd: 0.05,
+          usage,
+        },
+      ]),
+    );
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      problem: AUTH_PROBLEM,
+      costUsd: 0.05,
+      tokens: { input: 120, output: 34 },
+    });
+  });
+
   it("stops reading when the signal aborts, and throws", async () => {
     const { ctx } = setup();
     const controller = new AbortController();
@@ -357,6 +380,32 @@ describe("implement step guard", () => {
   it("fails when the branch has no commits of its own", async () => {
     const { ctx } = onBranch();
     const result = await runAgent(ctx, fake([success()]), config);
+    expect(result).toMatchObject({ outcome: "failed", problem: "the implement step made no changes" });
+  });
+
+  it("fails when the agent only merges an advanced base into an untouched branch", async () => {
+    const { root, ctx } = onBranch();
+    const query = fake([success()], {}, () => {
+      sh(root, "checkout", "-q", "main");
+      writeFileSync(join(root, "other.txt"), "x\n");
+      sh(root, "add", "-A");
+      sh(root, "commit", "-m", "base moves");
+      sh(root, "checkout", "-q", "hatch/abcdef12-add");
+      sh(root, "merge", "--no-ff", "--no-edit", "main");
+    });
+    const result = await runAgent(ctx, query, config);
+    expect(result).toMatchObject({ outcome: "failed", problem: "the implement step made no changes" });
+  });
+
+  it("fails when the branch's commits are already in base", async () => {
+    const { root, ctx } = onBranch();
+    const query = fake([success()], {}, () => {
+      writeFileSync(join(root, "own.txt"), "x\n");
+      sh(root, "add", "-A");
+      sh(root, "commit", "-m", "mine");
+      sh(root, "branch", "-f", "main", "HEAD");
+    });
+    const result = await runAgent(ctx, query, config);
     expect(result).toMatchObject({ outcome: "failed", problem: "the implement step made no changes" });
   });
 

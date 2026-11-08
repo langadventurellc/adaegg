@@ -40,7 +40,7 @@ hatch status           # count per status
 ## Changing prompts and workflows
 
 - To change how an agent behaves, edit its prompt in `prompts/` (`implement.md`, `review.md`). The review prompt must keep ending in the verdict JSON `{ "verdict": "approve" | "changes", "findings": [] }`.
-- To change the cycle, edit `workflows/implement.yaml`. Every outcome of a node needs an edge, and every loop needs an edge with `max`; the daemon refuses to start otherwise (`src/engine/workflows/implement.test.ts` checks the shipped file). Update the edge table in `docs/system/workflows.md` with it.
+- To change the cycle, edit `workflows/implement.yaml`. The loader refuses to start the daemon if an outcome of a node has no edge or a node config is invalid (for example `output: verdict` on an `agent` node; use `review`). It does not detect cycles: keeping every loop bounded by an edge with `max` is a convention, and `src/engine/workflows/implement.test.ts` verifies it for the shipped file. Update the edge table in `docs/system/workflows.md` with it.
 - Models are `models.implement` and `models.review` in `adaegg.json`.
 - Chaining work is `bin/hatch add "<title>" --blocked-by <id>`: the new item waits until that one is done.
 
