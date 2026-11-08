@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { PLAN_JSON_SCHEMA, type Plan, PlanSchema } from "../plan.ts";
 import type { WorkItem } from "../store.ts";
 import { commitAll, git } from "./git.ts";
 import { defineNode, type NodeContext, type NodeResult, type RunState } from "./types.ts";
@@ -13,19 +14,26 @@ export const AUTH_PROBLEM =
 
 const TOOL_OUTPUT_LIMIT = 2000;
 
-const AgentConfigSchema = z.object({
-  // Relative to the repo root, and inside `prompts/`.
-  prompt: z.string().min(1),
-  model: z.enum(["implement", "review"]),
-  tools: z.array(z.string()).default([]),
-  bash: z.array(z.string()).default([]),
-  deny: z.array(z.string()).default([]),
-  maxTurns: z.number().int().positive().optional(),
-  maxBudgetUsd: z.number().positive().optional(),
-  output: z.enum(["text", "verdict"]).default("text"),
-  // The implement step guard: commit what the agent left and require a change.
-  commit: z.boolean().default(false),
-});
+const AgentConfigSchema = z
+  .object({
+    // Relative to the repo root, and inside `prompts/`.
+    prompt: z.string().min(1),
+    model: z.enum(["implement", "review"]),
+    tools: z.array(z.string()).default([]),
+    bash: z.array(z.string()).default([]),
+    deny: z.array(z.string()).default([]),
+    maxTurns: z.number().int().positive().optional(),
+    maxBudgetUsd: z.number().positive().optional(),
+    output: z.enum(["text", "verdict", "plan"]).default("text"),
+    // Where the SDK runs: the run's worktree, or the main checkout for read-only agents.
+    cwd: z.enum(["worktree", "root"]).default("worktree"),
+    // The implement step guard: commit what the agent left and require a change.
+    commit: z.boolean().default(false),
+  })
+  .refine((c) => !(c.commit && c.cwd === "root"), {
+    message: "commit needs cwd worktree: it cannot be used with cwd root",
+    path: ["commit"],
+  });
 
 type AgentConfig = z.infer<typeof AgentConfigSchema>;
 
@@ -122,6 +130,14 @@ function readVerdict(structured: unknown, text: string) {
   return parsed.success ? parsed.data : null;
 }
 
+// The parsed plan, or the first Zod issue (or `no JSON found`) as the reason it is not one.
+function readPlan(structured: unknown, text: string): { plan: Plan } | { issue: string } {
+  const raw = structured ?? lastJsonBlock(text);
+  if (raw === undefined) return { issue: "no JSON found" };
+  const parsed = PlanSchema.safeParse(raw);
+  return parsed.success ? { plan: parsed.data } : { issue: parsed.error.issues[0]?.message ?? "invalid plan" };
+}
+
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
@@ -149,14 +165,17 @@ function createNode(type: "agent" | "review", query: QueryFn) {
     outcomes: verdictType ? ["approve", "changes", "failed", "blocked"] : ["done", "failed", "blocked"],
     configSchema: verdictType
       ? AgentConfigSchema.transform((c) => ({ ...c, output: "verdict" as const }))
-      : AgentConfigSchema.refine((c) => c.output === "text", {
+      : AgentConfigSchema.refine((c) => c.output !== "verdict", {
           message: 'output "verdict" needs the review node type',
           path: ["output"],
         }),
     async run(ctx): Promise<NodeResult> {
       const { config } = ctx;
       const worktree = ctx.state.worktree;
-      if (!worktree) return { outcome: "blocked", problem: "no worktree in the run state" };
+      if (config.cwd === "worktree" && !worktree) {
+        return { outcome: "blocked", problem: "no worktree in the run state" };
+      }
+      const cwd = config.cwd === "root" ? ctx.paths.root : (worktree as string);
       const file = promptPath(ctx.paths.root, config.prompt);
       if (!file) return { outcome: "blocked", problem: `prompt ${config.prompt} is not inside prompts/` };
       let promptText: string;
@@ -166,6 +185,7 @@ function createNode(type: "agent" | "review", query: QueryFn) {
         return { outcome: "blocked", problem: `cannot read prompt ${config.prompt}` };
       }
       const verdict = config.output === "verdict";
+      const planOutput = config.output === "plan";
       if (ctx.signal.aborted) throw abortError(ctx.signal);
 
       const abortController = new AbortController();
@@ -182,7 +202,7 @@ function createNode(type: "agent" | "review", query: QueryFn) {
         const stream = query({
           prompt: buildPrompt(promptText, ctx.workItem, ctx.state),
           options: {
-            cwd: worktree,
+            cwd,
             allowedTools: [...config.tools, ...config.bash.map((p) => `Bash(${p})`)],
             disallowedTools: config.deny,
             // Tools outside allowedTools are denied: nobody is there to answer a prompt.
@@ -194,6 +214,7 @@ function createNode(type: "agent" | "review", query: QueryFn) {
             abortController,
             env: { ...process.env, ADAEGG_STATE_DIR: resolve(ctx.paths.stateDir) },
             ...(verdict ? { outputFormat: { type: "json_schema" as const, schema: VERDICT_JSON_SCHEMA } } : {}),
+            ...(planOutput ? { outputFormat: { type: "json_schema" as const, schema: PLAN_JSON_SCHEMA } } : {}),
           },
         });
         for await (const message of stream) {
@@ -251,10 +272,19 @@ function createNode(type: "agent" | "review", query: QueryFn) {
           : { outcome: "changes", state: { findings: parsed.findings }, ...spent };
       }
 
+      if (planOutput) {
+        const read = readPlan(result.structured_output, resultText);
+        if ("issue" in read) {
+          return { outcome: "failed", problem: `the agent gave no valid plan: ${read.issue}`, ...spent };
+        }
+        return { outcome: "done", state: { plan: read.plan }, ...spent };
+      }
+
       if (config.commit) {
         let failed: NodeResult | null;
         try {
-          failed = implementGuard(ctx, worktree);
+          // commit: true implies cwd: worktree, which was checked above.
+          failed = implementGuard(ctx, worktree as string);
         } catch (err) {
           failed = { outcome: "failed", problem: errorMessageOf(err) };
         }
