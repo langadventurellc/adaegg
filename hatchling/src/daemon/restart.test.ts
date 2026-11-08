@@ -6,11 +6,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { z } from "zod";
 import { ConfigSchema } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
-import { readReady, readRestartRequest, restartPath } from "../engine/lifecycle.ts";
+import { readReady, readRestartRequest, restartPath, writeReady, writeRestartRequest } from "../engine/lifecycle.ts";
 import { buildTemplateRepo, copyRepo, removeAllRepos, removeCopies, sh } from "../engine/nodes/test-repo.ts";
 import { defineNode, type NodeContext, type NodeResult } from "../engine/nodes/types.ts";
+import { createRun } from "../engine/runs.ts";
 import { addWorkItem, getWorkItem } from "../engine/store.ts";
 import type { Workflow } from "../engine/workflows/schema.ts";
+import { runSupervisor } from "../supervisor/supervisor.ts";
 import type { Daemon } from "./daemon.ts";
 import { startDaemon } from "./main.ts";
 
@@ -247,6 +249,65 @@ describe("restart request", () => {
     expect(request?.preMergeHead).toBe(sh(root, "rev-parse", `${merges[older.id]}^1`));
     const changed = sh(root, "diff", "--name-only", request?.preMergeHead ?? "", request?.mergeCommit ?? "");
     expect(changed.split("\n")).toContain("package.json");
+  });
+
+  it("keeps the oldest preMergeHead when an older run resumes during probation, so the supervisor runs setup", async () => {
+    const older = addWorkItem(db, { title: "older" });
+    db.prepare("UPDATE work_items SET status = 'in_progress' WHERE id = ?").run(older.id);
+    createRun(db, getWorkItem(db, older.id), wf());
+    // The older merge changed package.json; the newer one, already on probation, only src/.
+    const olderState = mergeFile(root, "package.json", "older");
+    const newerState = mergeFile(root, "src/newer.ts", "newer");
+    const olderParent = sh(root, "rev-parse", `${olderState.mergeCommit}^1`);
+    writeRestartRequest(stateDir, {
+      mergeCommit: newerState.mergeCommit,
+      workItemId: "newer-item",
+      preMergeHead: sh(root, "rev-parse", `${newerState.mergeCommit}^1`),
+      requestedAt: new Date().toISOString(),
+    });
+
+    const { exits } = await start(async () => ({ outcome: "ok", state: olderState }));
+    await waitFor(() => exits.length > 0);
+    const request = readRestartRequest(stateDir);
+    expect(request?.mergeCommit).toBe(newerState.mergeCommit);
+    expect(request?.preMergeHead).toBe(olderParent);
+    expect(request?.earlier).toEqual([{ mergeCommit: olderState.mergeCommit, workItemId: older.id }]);
+
+    // The supervisor now sees package.json in the diff and runs setup before the next start.
+    const setupCalls: string[] = [];
+    let onExit: (code: number | null, signal: string | null) => void = () => {};
+    let stop: () => void = () => {};
+    const done = runSupervisor({
+      root,
+      stateDir,
+      config: { setup: "npm ci", baseBranch: "main" },
+      echo: null,
+      stdout: { write: () => true },
+      stderr: { write: () => true },
+      timing: { stableMs: 20, pollMs: 5, readyTimeoutMs: 5000, killGraceMs: 1000 },
+      signals: (h) => {
+        stop = h;
+        return () => {};
+      },
+      runSetup: (_root, command) => {
+        setupCalls.push(command);
+        return 0;
+      },
+      spawn: () => {
+        writeReady(stateDir, { pid: process.pid, startedAt: new Date().toISOString(), head: "x" });
+        return {
+          pid: process.pid,
+          onExit: (cb) => {
+            onExit = cb;
+          },
+          kill: () => onExit(0, null),
+        };
+      },
+    });
+    await waitFor(() => !existsSync(restartPath(stateDir)));
+    stop();
+    expect(await done).toBe(0);
+    expect(setupCalls).toEqual(["npm ci"]);
   });
 
   it("requests no restart when rev-parse fails", async () => {
