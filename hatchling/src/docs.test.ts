@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,21 +18,23 @@ const hatchlingRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function stripFencedBlocks(md: string): string {
   const kept: string[] = [];
-  let fence: string | undefined;
+  let fence: { char: string; length: number } | undefined;
   for (const line of md.split("\n")) {
-    const marker = /^\s*(```|~~~)/.exec(line)?.[1];
     if (fence === undefined) {
-      if (marker) fence = marker;
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+      if (open) fence = { char: open[0] as string, length: open.length };
       else kept.push(line);
-    } else if (marker === fence) {
-      fence = undefined;
+    } else {
+      // A closing fence uses the same character, at least as long as the opening one, with nothing after it.
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line)?.[1];
+      if (close && close[0] === fence.char && close.length >= fence.length) fence = undefined;
     }
   }
   return kept.join("\n");
 }
 
 function extractLinks(md: string): string[] {
-  const text = stripFencedBlocks(md).replace(/`[^`\n]*`/g, "");
+  const text = stripFencedBlocks(md).replace(/(`+)[^\n]*?\1(?!`)/g, "");
   const links: string[] = [];
   for (const match of text.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
     const target = match[1] as string;
@@ -36,7 +47,7 @@ function extractLinks(md: string): string[] {
 
 function extractInlinePaths(md: string): string[] {
   const paths: string[] = [];
-  for (const match of stripFencedBlocks(md).matchAll(/`([^`\n]+)`/g)) {
+  for (const match of stripFencedBlocks(md).matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)) {
     const token = match[1] as string;
     if (!/^(src|docs|workflows|prompts|bin)\//.test(token)) continue;
     if (/[*<>{}\s]/.test(token)) continue;
@@ -71,13 +82,16 @@ function cliBlockCommands(agentsMd: string): string[] {
 }
 
 function docsFiles(root: string): string[] {
-  const docs = existsSync(join(root, "docs"))
-    ? (readdirSync(join(root, "docs"), { recursive: true }) as string[])
-        .filter((f) => f.endsWith(".md"))
-        .map((f) => join("docs", f))
-        .sort()
-    : [];
-  return ["AGENTS.md", ...docs];
+  return ["AGENTS.md", ...allDocsFiles(root).filter((f) => f.endsWith(".md"))];
+}
+
+// Every file under docs/, whatever its type.
+function allDocsFiles(root: string): string[] {
+  if (!existsSync(join(root, "docs"))) return [];
+  return (readdirSync(join(root, "docs"), { recursive: true }) as string[])
+    .map((f) => join("docs", f))
+    .filter((f) => statSync(join(root, f)).isFile())
+    .sort();
 }
 
 function checkLinks(root: string, files: string[]): string[] {
@@ -108,13 +122,12 @@ function checkReachability(root: string): string[] {
     if (!existsSync(join(root, file))) continue;
     for (const link of extractLinks(readFileSync(join(root, file), "utf8"))) {
       const target = resolve(root, dirname(file), link).slice(resolve(root).length + 1);
-      if (target.endsWith(".md") && !seen.has(target)) {
-        seen.add(target);
-        queue.push(target);
-      }
+      if (seen.has(target)) continue;
+      seen.add(target);
+      if (target.endsWith(".md")) queue.push(target);
     }
   }
-  return docsFiles(root)
+  return allDocsFiles(root)
     .filter((f) => !seen.has(f))
     .map((f) => `${f}: not reachable from AGENTS.md by links`);
 }
@@ -172,6 +185,18 @@ describe("extraction helpers", () => {
     expect(extractInlinePaths(md)).toEqual(["src/a.ts", "bin/hatch"]);
   });
 
+  it("keeps a longer fence open until a closing fence at least as long", () => {
+    const text = ["````", "```", "[in](inside.md) `src/inside.ts`", "```", "````", "[out](outside.md)"].join("\n");
+    expect(extractLinks(text)).toEqual(["outside.md"]);
+    expect(extractInlinePaths(text)).toEqual([]);
+  });
+
+  it("ignores double-backtick spans as inline paths and links", () => {
+    const text = "Only ``src/missing.ts`` and ``[x](double.md)`` here, but `src/real.ts` counts.";
+    expect(extractInlinePaths(text)).toEqual(["src/real.ts"]);
+    expect(extractLinks(text)).toEqual([]);
+  });
+
   it("reads the commands of the CLI block", () => {
     const agents =
       '## The `hatch` CLI\n\n```\nhatch add "x"\nhatch list  # c\n  hatch no\n```\n\n## Next\n\n```\nhatch other\n```\n';
@@ -215,6 +240,16 @@ describe("failing cases", () => {
     const errors = checkReachability(root);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("docs/orphan.md");
+  });
+
+  it("reports an unlinked non-Markdown doc file and accepts a linked one", () => {
+    const root = fixture({
+      "AGENTS.md": "[a](docs/a.md)",
+      "docs/a.md": "[img](diagram.svg)",
+      "docs/diagram.svg": "<svg/>",
+      "docs/stray.json": "{}",
+    });
+    expect(checkReachability(root)).toEqual(["docs/stray.json: not reachable from AGENTS.md by links"]);
   });
 
   it("follows links through other docs", () => {

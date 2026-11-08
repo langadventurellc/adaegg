@@ -88,7 +88,7 @@ Kinds: `item` (built by `implement`), `request` (planned into items), `verify` (
 ## Transcripts and costs
 
 - The transcript of each agent attempt is `.adaegg/logs/<run8>/<node id>-<attempt>.jsonl`, where `<run8>` is the first 8 characters of the run id (`hatch runs` or `hatch show <id>` shows it). If `ADAEGG_STATE_DIR` is set, look under `$ADAEGG_STATE_DIR/logs/`.
-- The cost and tokens of each node run are in `hatch show <id>`.
+- The cost of each node run is in `hatch show <id>`. Token counts (`inputTokens`, `outputTokens`) appear only in `hatch show <id> --json`, which also includes each run's `state` (review `findings` and `checkOutput`).
 
 ## The schedule
 
