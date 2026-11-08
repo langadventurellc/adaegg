@@ -16,7 +16,16 @@ const template = readPackage("../hatchling/package.json");
 const versionOf = (pkg: PackageJson, name: string): string | undefined =>
   pkg.dependencies?.[name] ?? pkg.devDependencies?.[name];
 
-const shared = ["@biomejs/biome", "typescript", "vite", "vitest", "zod", "yaml", "@types/node"];
+const shared = [
+  "@anthropic-ai/claude-agent-sdk",
+  "@biomejs/biome",
+  "typescript",
+  "vite",
+  "vitest",
+  "zod",
+  "yaml",
+  "@types/node",
+];
 
 describe("hatchling template", () => {
   it.each(shared)("pins %s to the same exact version as the root", (name) => {

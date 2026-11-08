@@ -1,0 +1,44 @@
+id: implement
+name: Implement
+trigger: { type: queue, kind: item }
+start: branch
+nodes:
+  - { id: branch, type: branch }
+  - id: implement
+    type: agent
+    config:
+      model: implement
+      prompt: prompts/implement.md
+      commit: true
+      tools: [Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch]
+      bash: ["npm *", "npx *", "node *", "git *", "ls *", "mkdir *", "bin/hatch *"]
+      deny: ["Bash(git push*)", "Bash(git remote*)"]
+      maxTurns: 150
+      maxBudgetUsd: 10
+  - { id: checks, type: checks }
+  - id: review
+    type: review
+    config:
+      model: review
+      prompt: prompts/review.md
+      tools: [Read, Glob, Grep]
+      bash: ["git diff*", "git log*", "git show*", "git status*"]
+      maxTurns: 60
+      maxBudgetUsd: 3
+  - { id: merge, type: merge }
+edges:
+  - { from: branch, on: ok, to: implement }
+  - { from: branch, on: fail, to: fail }
+  - { from: implement, on: done, to: checks }
+  - { from: implement, on: failed, to: fail }
+  - { from: implement, on: blocked, to: fail }
+  - { from: checks, on: passed, to: review }
+  - { from: checks, on: failed, to: implement, max: 2 }
+  - { from: review, on: approve, to: merge }
+  - { from: review, on: changes, to: implement, max: 2 }
+  - { from: review, on: failed, to: fail }
+  - { from: review, on: blocked, to: fail }
+  - { from: merge, on: merged, to: end }
+  - { from: merge, on: moved, to: checks, max: 2 }
+  - { from: merge, on: conflict, to: implement, max: 2 }
+  - { from: merge, on: blocked, to: fail }

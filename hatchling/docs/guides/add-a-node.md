@@ -15,7 +15,7 @@ type NodeType<C> = {
 };
 ```
 
-`ctx` holds `workItem`, `state` (the `RunState`), the validated `config`, `paths` (`root`, `stateDir`), `appConfig`, an abort `signal` and `now()`. `run` returns `{ outcome, problem?, state?, costUsd?, tokens? }`; `state` is a patch merged shallowly into the run state. Nodes talk to each other only through `state`; never import another node.
+`ctx` holds `workItem`, `runId`, `nodeId`, `attempt` (which attempt of this node in the run, from 1), `state` (the `RunState`), the validated `config`, `paths` (`root`, `stateDir`), `appConfig`, an abort `signal` and `now()`. `run` returns `{ outcome, problem?, state?, costUsd?, tokens? }`; `state` is a patch merged shallowly into the run state. Nodes talk to each other only through `state`; never import another node.
 
 ## Steps
 

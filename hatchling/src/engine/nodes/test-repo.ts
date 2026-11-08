@@ -75,6 +75,9 @@ export function makeCtx(
 ): NodeContext<Record<string, never>> {
   return {
     workItem: makeWorkItem(opts.workItem),
+    runId: "0123456789abcdef",
+    nodeId: "node",
+    attempt: 1,
     state: RunStateSchema.parse(opts.state ?? {}),
     config: {},
     paths: { root, stateDir: join(root, ".adaegg") },

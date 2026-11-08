@@ -62,6 +62,30 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 | `changedPaths` | files the merge changed |
 | `problem` | the latest problem |
 
+## The shipped `implement` workflow
+
+`workflows/implement.yaml` (trigger `queue`, kind `item`, start `branch`) is the basic implement cycle: branch, an `agent` node that implements, checks, a `review` node, then merge. Its prompts are `prompts/implement.md` and `prompts/review.md`; see `agents.md` for the agent nodes.
+
+| From | Outcome | To | Bound |
+| --- | --- | --- | --- |
+| `branch` | `ok` | `implement` | |
+| `branch` | `fail` | `fail` | |
+| `implement` | `done` | `checks` | |
+| `implement` | `failed` | `fail` | |
+| `implement` | `blocked` | `fail` | |
+| `checks` | `passed` | `review` | |
+| `checks` | `failed` | `implement` | `max: 2` |
+| `review` | `approve` | `merge` | |
+| `review` | `changes` | `implement` | `max: 2` |
+| `review` | `failed` | `fail` | |
+| `review` | `blocked` | `fail` | |
+| `merge` | `merged` | `end` | |
+| `merge` | `moved` | `checks` | `max: 2` |
+| `merge` | `conflict` | `implement` | `max: 2` |
+| `merge` | `blocked` | `fail` | |
+
+Every loop goes through an edge with a `max`, so a run cannot cycle forever; the third time checks fail the run fails with `loop checks:failed exceeded its limit of 2`. When `implement` runs again it is shown what sent it back (`checkOutput`, `findings` or `conflictFiles`). `implement` has `commit: true`, so its work is committed and an empty branch fails. `blocked` from an agent (not signed in) fails the run; fix the cause and `hatch retry` the item.
+
 ## Idempotent resume
 
 The runner writes `current_node` before the node runs. If the process stops (a crash, or SIGINT/SIGTERM, which abort the signal the nodes get), the run stays `running` and the next daemon start resumes it at `current_node`, so that node runs again. Every node must therefore be safe to run twice. A node whose work was cut short by an abort leaves no `node_runs` row.
@@ -70,6 +94,7 @@ The runner writes `current_node` before the node runs. If the process stops (a c
 
 - **`branch`** (`ok`, `fail`): the branch is `hatch/<id8>-<slug of title>` and the worktree `<state dir>/worktrees/<id8>` (`.adaegg/worktrees/<id8>`). If the worktree exists it is reused; if only the branch exists, the worktree is added on it; otherwise both are created from `baseBranch`. That is how a retried item continues earlier work. It records the commit the branch started from in git config (`branch.<name>.hatchStart`), which the merge node uses to tell a branch with work from one without. It then runs `setup` in the worktree (an empty string skips it) asynchronously, so a shutdown aborts it; a failing setup gives `fail` with the output tail as the problem.
 - **`checks`** (`passed`, `failed`): runs the `checks` command through a shell in the worktree with `CI=1` and the `checksTimeoutMinutes` timeout. It keeps the last 200 lines (at most 20KB) in `state.checkOutput` and clears it on pass. On pass it records the worktree's HEAD in `state.checkedCommit`.
+- **`agent`** and **`review`** run Claude; see `docs/system/agents.md`. The models they use are the `models.implement` and `models.review` aliases in `adaegg.json` (both default to `sonnet`).
 - **`merge`** (`merged`, `moved`, `conflict`, `blocked`):
   - If the branch is an ancestor of base and has commits of its own (its tip is not the `hatchStart` commit), it returns `merged`, however it got there (merge commit, fast-forward, or through another merged branch). `mergeCommit` is the first commit on base's first-parent history that contains the branch and `changedPaths` is recovered from git, so a re-run after a crash gives the same result.
   - If the main checkout isn't on `baseBranch` or has uncommitted changes (`.adaegg/` ignored), it returns `blocked` with what to clean up. The merge runs in the main checkout, so it must be clean: the merge would otherwise mix the item's work with someone's unfinished edits or fail midway.

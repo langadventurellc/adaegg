@@ -24,7 +24,18 @@ describe("loadConfig", () => {
       setup: "npm ci",
       checksTimeoutMinutes: 20,
       maxConcurrentRuns: 1,
+      models: { implement: "sonnet", review: "sonnet" },
     });
+  });
+
+  it("defaults a model that is not named and accepts overrides", () => {
+    writeFileSync(join(dir, "adaegg.json"), '{ "schema": 1, "models": { "review": "opus" } }');
+    expect(loadConfig(dir).models).toEqual({ implement: "sonnet", review: "opus" });
+  });
+
+  it("rejects a model that is not a string", () => {
+    writeFileSync(join(dir, "adaegg.json"), '{ "schema": 1, "models": { "implement": 3 } }');
+    expect(() => loadConfig(dir)).toThrow("models.implement");
   });
 
   it("accepts overrides, including an empty setup", () => {
