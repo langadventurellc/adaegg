@@ -158,7 +158,31 @@ describe("list, show, cancel, retry, status", () => {
     await add(["B"]);
     await hatch(["cancel", a]);
     const r = await hatch(["status"]);
-    expect(r.out).toBe("queued  1\nin_progress  0\ndone  0\nfailed  0\ncancelled  1\n");
+    expect(r.out).toBe("queued  1\nin_progress  0\ndone  0\nfailed  0\ncancelled  1\ndaemon  down\n");
+  });
+
+  it("reports the daemon as up when ready.json names a live pid", async () => {
+    mkdirSync(state, { recursive: true });
+    writeFileSync(
+      join(state, "ready.json"),
+      JSON.stringify({ pid: process.pid, startedAt: "2026-01-01T00:00:00.000Z", head: "abc" }),
+    );
+    const r = await hatch(["status"]);
+    expect(r.out.endsWith(`daemon  up (pid ${process.pid})\n`)).toBe(true);
+  });
+
+  it("reports the daemon as down when ready.json names a dead pid", async () => {
+    mkdirSync(state, { recursive: true });
+    writeFileSync(
+      join(state, "ready.json"),
+      JSON.stringify({ pid: 2147483646, startedAt: "2026-01-01T00:00:00.000Z", head: "abc" }),
+    );
+    const r = await hatch(["status"]);
+    expect(r.out.endsWith("cancelled  0\ndaemon  down\n")).toBe(true);
+  });
+
+  it("rejects an argument to start", async () => {
+    expectOneLineError(await hatch(["start", "now"]), /unexpected argument: now/);
   });
 });
 

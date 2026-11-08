@@ -59,7 +59,7 @@ Nodes talk only through `RunState` (`src/engine/nodes/types.ts`), validated by Z
 | `findings` | review findings, one string each |
 | `conflictFiles` | files that conflicted when merging base |
 | `mergeCommit` | the merge commit on base |
-| `changedPaths` | files the merge changed |
+| `changedPaths` | files the merge changed; drives restarts (see the `merge` node below) |
 | `problem` | the latest problem |
 
 ## The shipped `implement` workflow
@@ -100,3 +100,4 @@ The runner writes `current_node` before the node runs. If the process stops (a c
   - If the main checkout isn't on `baseBranch` or has uncommitted changes (`.adaegg/` ignored), it returns `blocked` with what to clean up. The merge runs in the main checkout, so it must be clean: the merge would otherwise mix the item's work with someone's unfinished edits or fail midway.
   - If base has commits the branch lacks, it merges base into the branch in the worktree first. On conflict it aborts the merge, puts the files in `state.conflictFiles` and returns `conflict`. On a clean merge it returns `moved`, so the workflow re-runs the checks. Base is brought in first so the checks run on exactly what will land on base, and conflicts are resolved in the worktree, never in the main checkout. Before merging base in, the node writes `branch.<name>.hatchMovedFrom` (the old tip). If a crash lost the `moved` outcome, the next run sees a tip that differs from it and, unless `state.checkedCommit` is that tip, returns `moved` again, so the combined commit is always checked before it lands.
   - Otherwise it runs `git merge --no-ff -m "hatch: <title> (<id8>)" <branch>` in the main checkout. A failure aborts the merge and returns `blocked`. On success it sets `mergeCommit` and `changedPaths` and returns `merged`.
+  - `changedPaths` drives restarts: when a run succeeds and its merge touched `src/`, `workflows/`, `prompts/`, `bin/`, `package.json`, `package-lock.json` or `adaegg.json`, the daemon writes `<state>/restart.json`, stops claiming, waits for other runs and exits 75. See `restart-and-rollback.md`.

@@ -9,6 +9,7 @@ import {
   finishWorkItem,
   getWorkItem,
   listWorkItems,
+  markReverted,
   retryWorkItem,
 } from "./store.ts";
 
@@ -183,6 +184,25 @@ describe("transitions", () => {
     finishWorkItem(db, a.id);
     expect(getWorkItem(db, a.id)).toMatchObject({ status: "done" });
     expect(() => finishWorkItem(db, a.id)).toThrow("cannot finish");
+  });
+
+  it("marks a done item reverted: done -> failed with the error", () => {
+    const a = addWorkItem(db, { title: "a" });
+    claimNext(db, "item");
+    finishWorkItem(db, a.id);
+    const reverted = markReverted(db, a.id, "its merge was reverted");
+    expect(reverted).toMatchObject({ status: "failed", error: "its merge was reverted" });
+    expect(reverted.finishedAt).not.toBeNull();
+  });
+
+  it("refuses to mark queued, in_progress or failed items reverted", () => {
+    const a = addWorkItem(db, { title: "a" });
+    expect(() => markReverted(db, a.id, "x")).toThrow("only done items can be marked reverted");
+    claimNext(db, "item");
+    expect(() => markReverted(db, a.id, "x")).toThrow("status is in_progress");
+    failWorkItem(db, a.id, "boom");
+    expect(() => markReverted(db, a.id, "x")).toThrow("status is failed");
+    expect(getWorkItem(db, a.id).error).toBe("boom");
   });
 });
 
