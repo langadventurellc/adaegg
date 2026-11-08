@@ -1,6 +1,6 @@
 # Work item queue
 
-The queue lives in SQLite (`src/engine/db.ts`, `src/engine/store.ts`). The `hatch` CLI reads and writes it today; a daemon will claim from it later.
+The queue lives in SQLite (`src/engine/db.ts`, `src/engine/store.ts`). The `hatch` CLI reads and writes it; the daemon claims from it and the runner records runs (see `workflows.md`).
 
 ## Work item
 
@@ -23,7 +23,7 @@ Blockers are rows in `work_item_blocks(item_id, blocked_by_id)`.
 `queued`, `in_progress`, `done`, `failed`, `cancelled`.
 
 - `queued` → `in_progress` (claim) or `cancelled` (cancel).
-- `in_progress` → `done` (finish) or `failed` (fail).
+- `in_progress` → `done` (finish) or `failed` (fail). The daemon claims an item (`in_progress`) and starts a run for it; the runner finishes or fails the item when the run reaches `end` or `fail`. A run interrupted by a shutdown leaves the item `in_progress` and is resumed on the next start.
 - `failed` or `cancelled` → `queued` (retry).
 
 Any other transition throws.
@@ -34,7 +34,7 @@ An item is claimable only when all its blockers are `done`. A blocker that is `f
 
 ## Claiming
 
-`claimNext(db, kind)` runs in one transaction (`BEGIN IMMEDIATE`). It picks the queued item of that kind, with all blockers done, with the highest priority and then the oldest `created_at`, and sets it `in_progress`. When nothing is claimable it returns null and writes nothing (no `updated_at` changes). Two claims never return the same item.
+`claimNext(db, kind)` runs in one transaction (`BEGIN IMMEDIATE`). It picks the queued item of that kind, with all blockers done, with the highest priority and then the oldest `created_at`, and sets it `in_progress`. When nothing is claimable it returns null and writes nothing (no `updated_at` changes). Two claims never return the same item. The daemon creates the item's `runs` row only after a claim succeeds, so an empty claim writes nothing at all.
 
 ## Ids
 
