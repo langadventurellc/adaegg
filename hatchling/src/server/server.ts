@@ -172,7 +172,9 @@ export function createUiServer(opts: UiServerOptions): UiServer {
       await listen(opts.port);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") throw err;
-      process.stderr.write(`ui: port ${opts.port} is in use, using a free port instead\n`);
+      process.stderr.write(
+        `ui: this hatchling's usual address (port ${opts.port}) is busy because another program is using it, so it is on a temporary address this time\n`,
+      );
       await listen(0);
     }
     boundPort = (server.address() as AddressInfo).port;

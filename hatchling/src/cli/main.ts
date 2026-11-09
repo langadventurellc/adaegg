@@ -213,6 +213,20 @@ export async function openWhenReady(io: CliIo, dir: string, signal: { stopped: b
   if (url !== null) await openUrl(io, url);
 }
 
+// Once the daemon is ready, says how to reach and stop the foreground hatchling, then opens the browser if asked.
+async function announceWhenReady(
+  io: CliIo,
+  dir: string,
+  signal: { stopped: boolean },
+  name: string,
+  open: boolean,
+): Promise<void> {
+  const url = await waitForUrl(dir, startDeps(io), signal);
+  if (url === null) return;
+  io.stdout.write(`${name} is running at ${url} (press Ctrl-C to stop)\n`);
+  if (open) await openUrl(io, url);
+}
+
 function defaultSpawn({ command, args, cwd, logFile, env }: SpawnArgs): void {
   const logFd = openSync(logFile, "a");
   try {
@@ -479,7 +493,14 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
         throw new Error(`a hatchling is already running here (pid ${recorded.pid}); stop it with hatch stop`);
       }
       const signal = { stopped: false };
-      const opened = values.open ? openWhenReady(io, dir, signal) : Promise.resolve();
+      const nameDb = openDb(dbPath(root, env));
+      let name: string;
+      try {
+        name = getSetting(nameDb, "name") ?? "Your hatchling";
+      } finally {
+        nameDb.close();
+      }
+      const opened = announceWhenReady(io, dir, signal, name, values.open === true);
       let code: number;
       try {
         code = await (io.start?.supervisor ?? runSupervisor)({
