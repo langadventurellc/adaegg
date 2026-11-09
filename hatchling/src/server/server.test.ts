@@ -102,6 +102,16 @@ describe("createUiServer", () => {
     expect(res.status).toBe(403);
   });
 
+  it("refuses a cross-site Origin on a page-data route", async () => {
+    const { url } = await begin();
+    const res = await fetch(`${url}/api/pages/water/data/today`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, origin: "http://evil.example" },
+      body: JSON.stringify({ value: 1 }),
+    });
+    expect(res.status).toBe(403);
+  });
+
   it("rejects a 65 KiB body with 413", async () => {
     const { url } = await begin();
     const res = await fetch(`${url}/api/ask`, {

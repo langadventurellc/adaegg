@@ -4,7 +4,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 
 ## Layout
 
-- `src/engine/`: paths, config, database, queue store, run store, runner, workflow loader and node types (`nodes/`).
+- `src/engine/`: paths, config, database, page data store (`page-data.ts`), queue store, run store, runner, workflow loader and node types (`nodes/`).
 - `src/daemon/`: the daemon (`daemon.ts`) and its entry point (`main.ts`).
 - `src/supervisor/`: the supervisor behind `hatch start`.
 - `src/cli/`: the `hatch` CLI.
@@ -27,6 +27,8 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 ## Building what the user asks for
 
 Requests asked in the UI come from a person using a browser. Unless they ask for something else (a command, or a change to the hatchling itself, such as its Ask screen or its workflows), what they ask for is built as a page in `src/ui/pages/<id>/`, registered in `PAGES` and reachable from the Ask screen under "Your pages". The `hatch` CLI is for operating the hatchling, not for the user's features. See the Pages section of [ui](docs/system/ui.md).
+
+A page that keeps data uses `pageData(<page id>)` from `src/ui/client.ts` (`list`, `get`, `set`, `remove`) and the `page_data` store, never `localStorage` or files. Data belongs to the person: a change to a page must keep reading the data its earlier version saved, or migrate it in the page's code.
 
 ## The `hatch` CLI
 

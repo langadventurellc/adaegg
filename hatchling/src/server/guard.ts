@@ -1,3 +1,6 @@
+// The largest request body the server reads; a stored page value may not exceed it either.
+export const MAX_BODY_BYTES = 64 * 1024;
+
 export type GuardRequest = {
   method: string;
   headers: Record<string, string | string[] | undefined>;

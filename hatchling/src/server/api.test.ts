@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../engine/db.ts";
 import { addWorkItem, claimNext, failWorkItem, finishWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
@@ -123,6 +126,81 @@ describe("handleApi delivery", () => {
 
     expect(post(db, `/api/items/${child.id}/retry`, {}).status).toBe(200);
     expect(rowOf()?.delivery).toEqual({ state: "building", attention: null });
+  });
+});
+
+describe("handleApi page data", () => {
+  it("sets, lists and deletes", () => {
+    const db = openDb(":memory:");
+    const set = post(db, "/api/pages/water/data/today", { value: { cups: 3 } });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ key: "today", value: { cups: 3 } });
+    expect(typeof (set.body as { updatedAt: string }).updatedAt).toBe("string");
+    post(db, "/api/pages/journal/data/today", { value: "other" });
+    expect(get(db, "/api/pages/water/data")).toEqual({
+      status: 200,
+      body: { items: [set.body] },
+    });
+    expect(post(db, "/api/pages/water/data/today/delete", {})).toEqual({ status: 200, body: { key: "today" } });
+    expect(get(db, "/api/pages/water/data").body).toEqual({ items: [] });
+  });
+
+  it("accepts null and a key named delete", () => {
+    const db = openDb(":memory:");
+    expect(post(db, "/api/pages/p/data/delete", { value: null }).body).toMatchObject({ key: "delete", value: null });
+  });
+
+  it("answers 404 deleting a missing key", () => {
+    expect(post(openDb(":memory:"), "/api/pages/water/data/nope/delete", {}).status).toBe(404);
+  });
+
+  it.each([
+    "/api/pages/Bad%20Page/data",
+    "/api/pages/a.b/data",
+    `/api/pages/${"a".repeat(65)}/data`,
+    "/api/pages/%E0%A4%A/data",
+  ])("answers 400 for a bad page in %s", (path) => {
+    expect(get(openDb(":memory:"), path).status).toBe(400);
+  });
+
+  it.each(["a.b", "a%20b", "a".repeat(65), "%E0%A4%A"])("answers 400 for the bad key %s", (key) => {
+    const db = openDb(":memory:");
+    expect(post(db, `/api/pages/water/data/${key}`, { value: 1 }).status).toBe(400);
+    expect(post(db, `/api/pages/water/data/${key}/delete`, {}).status).toBe(400);
+  });
+
+  it.each([{}, [], null, "x", 3, undefined])("answers 400 for the body %j without a value", (body) => {
+    expect(post(openDb(":memory:"), "/api/pages/water/data/today", body).status).toBe(400);
+  });
+
+  it("answers 413 for a value over 64 KiB", () => {
+    const db = openDb(":memory:");
+    expect(post(db, "/api/pages/water/data/big", { value: "a".repeat(64 * 1024) }).status).toBe(413);
+    expect(get(db, "/api/pages/water/data").body).toEqual({ items: [] });
+  });
+
+  it("answers 405 for the wrong method", () => {
+    const db = openDb(":memory:");
+    expect(post(db, "/api/pages/water/data", {}).status).toBe(405);
+    expect(get(db, "/api/pages/water/data/today").status).toBe(405);
+    expect(get(db, "/api/pages/water/data/today/delete").status).toBe(405);
+  });
+
+  it("survives closing and reopening the db file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hatchling-page-data-"));
+    try {
+      const file = join(dir, "state", "db.sqlite");
+      const db = openDb(file);
+      post(db, "/api/pages/water/data/today", { value: [1, 2] });
+      db.close();
+      const again = openDb(file);
+      expect((get(again, "/api/pages/water/data").body as { items: unknown[] }).items).toMatchObject([
+        { key: "today", value: [1, 2] },
+      ]);
+      again.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

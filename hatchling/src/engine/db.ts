@@ -53,6 +53,13 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX work_items_source ON work_items (source_id);`,
   `CREATE TABLE schedules (workflow_id TEXT PRIMARY KEY, last_checked_at TEXT NOT NULL);`,
   `CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  `CREATE TABLE page_data (
+    page TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (page, key)
+  );`,
 ];
 
 export function openDb(path: string): DatabaseSync {
