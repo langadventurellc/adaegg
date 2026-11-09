@@ -90,6 +90,8 @@ Statuses:
 
 Kinds: `item` (built by `implement`), `request` (planned into items), `verify` (checks a request was delivered), and the id of a cron workflow, such as `tidy`, for scheduled items. See [queue](../system/queue.md).
 
+In Ask, a request is "Delivered" only when every step and the verification are done. "Needs attention" means a step failed: press Retry on the step it names. "Incomplete" means the verification gave up with work still missing: use "Ask for the rest" (it fills the textarea for you to edit and send), or look with `hatch show <id>`.
+
 ## Cancel and retry
 
 - `hatch cancel <id>` works on `queued` items only. An item already `in_progress` cannot be cancelled.

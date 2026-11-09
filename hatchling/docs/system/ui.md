@@ -1,6 +1,6 @@
 # The UI server
 
-The daemon also serves a small local web server: a guarded JSON API and the browser UI. The code is in `src/server/`: `server.ts` (the `node:http` server), `guard.ts` (the request guard), `api.ts` (the routes) and `queue.ts` (the queue summary and titles). Vite runs in middleware mode and serves `index.html` and `src/ui/`, so the UI changes by editing source: the daemon needs no build step.
+The daemon also serves a small local web server: a guarded JSON API and the browser UI. The code is in `src/server/`: `server.ts` (the `node:http` server), `guard.ts` (the request guard), `api.ts` (the routes) and `queue.ts` (the queue summary with `deliveryOf`, and titles). Vite runs in middleware mode and serves `index.html` and `src/ui/`, so the UI changes by editing source: the daemon needs no build step.
 
 ## Config and URL
 
@@ -36,6 +36,7 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
   - `createdAt: string`, as stored.
   - `progress: { done: number, total: number } | null`: counts of the row's child items of kind `item` (`done` are those with status `done`); `null` when it has none. `verify` children are not counted.
   - `blockedBy: string[]`, ids of the items it waits for (empty when none).
+  - `delivery: { state, attention } | null`: `null` for a row of kind `item`. For a `request`, `state` is `planning`, `building`, `verifying`, `delivered`, `needs-attention`, `incomplete`, `failed` or `cancelled`, derived by `deliveryOf` in `queue.ts` from the parent, its steps and its verifications. `attention` is `null` or `{ id, title, error, action }` naming the item that needs a human: `action` is `retry` for a failed or cancelled step or verification and for a failed or cancelled request, and `ask-again` for `incomplete` (verification gave up with work missing). `status` stays the parent item's status (a planned request is `done` while its steps are still queued), and `progress` still counts only step children.
 
 Anything asked through `/api/ask` is a `request`, which the daemon plans into items and verifies (see [workflows](workflows.md)), so the user never writes a spec.
 
@@ -54,7 +55,7 @@ There is no login. Anyone who can open 127.0.0.1 on this machine can queue work,
 The page is plain TypeScript with no framework, in `src/ui/`:
 
 - Onboarding: shown while no name is stored, and again from "Change name" (the heading then reads "Rename <name>" and the input is prefilled with the current name). It suggests a name from the names list (see [names](names.md)), with "Another suggestion" for more. The name is validated in the browser with `validateName`, and a server 400 shows the server's message inline.
-- Ask: `Ask <name>` with a textarea, three starter requests (buttons that fill the textarea and never submit) and the "Your requests" list. Asking posts to `/api/ask`. Failed rows have Retry and queued rows have Cancel.
+- Ask: `Ask <name>` with a textarea, three starter requests (buttons that fill the textarea and never submit) and the "Your requests" list. Asking posts to `/api/ask`. Each request shows its `delivery` state (Building, Checking the result, Delivered, Needs attention, Incomplete) instead of Done. A row that needs attention names the failing step and has Retry on that step; an incomplete row has "Ask for the rest", which fills the textarea and never submits, and no Retry. Failed or cancelled requests have Retry, and queued rows have Cancel.
 - While the server is unreachable (for example during the restart after a self-change) a "restarting" banner shows above the current screen and polling continues. The page never reloads itself; Vite's client does that when the daemon comes back.
 
 The browser tab title is `Ask <name>` on the ask screen and `Ada Egg` (the product name) during onboarding.
@@ -64,7 +65,7 @@ The browser tab title is `Ask <name>` on the ask screen and `Ada Egg` (the produ
 | File | Role |
 | --- | --- |
 | `src/ui/main.ts` | The thin DOM shell: loads state, renders, delegates `data-action` clicks and form submits on `#app`, polls. |
-| `src/ui/view.ts` | Pure rendering to HTML strings (`renderOnboarding`, `renderAsk`, `renderRequests`, `renderBanner`) and `screenFor`. |
+| `src/ui/view.ts` | Pure rendering to HTML strings (`renderOnboarding`, `renderAsk`, `renderRequests`, `renderBanner`), `describeDelivery` (the label for a delivery state) and `screenFor`. |
 | `src/ui/state.ts` | Pure screen-state transitions, with the random source injected. |
 | `src/ui/client.ts` | The typed API client (`ApiError`, `UnreachableError`). |
 | `src/ui/starters.ts` | `STARTER_REQUESTS` and `pickStarters`. |

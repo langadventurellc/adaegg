@@ -1,5 +1,5 @@
 import type { NameEntry } from "../names/names.ts";
-import type { RequestRow } from "../server/queue.ts";
+import type { Delivery, RequestRow } from "../server/queue.ts";
 
 export const RESTARTING_MESSAGE = "Your hatchling is restarting. This page will reconnect by itself.";
 
@@ -37,7 +37,68 @@ export function progressLabel(progress: { done: number; total: number } | null):
   return progress === null ? "" : `${progress.done} of ${progress.total} done`;
 }
 
+export function describeDelivery(delivery: Delivery, row: Pick<RequestRow, "status" | "blockedBy">): string {
+  switch (delivery.state) {
+    case "planning":
+      return describeStatus(row);
+    case "building":
+      return "Building";
+    case "verifying":
+      return "Checking the result";
+    case "delivered":
+      return "Delivered";
+    case "needs-attention":
+      return "Needs attention";
+    case "incomplete":
+      return "Incomplete";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+  }
+}
+
+function renderDeliveryRow(row: RequestRow, delivery: Delivery): string {
+  const id = escapeHtml(row.id);
+  const progress = progressLabel(row.progress);
+  const parts = [
+    `<li class="request" data-status="${escapeHtml(delivery.state)}">`,
+    `<span class="request-title">${escapeHtml(row.title)}</span>`,
+    `<span class="status">${describeDelivery(delivery, row)}</span>`,
+  ];
+  if (progress !== "" && delivery.state !== "delivered") {
+    parts.push(`<span class="progress">${escapeHtml(progress)}</span>`);
+  }
+  const attention = delivery.attention;
+  if (attention !== null) {
+    let message: string | null;
+    if (delivery.state === "failed" || delivery.state === "cancelled") {
+      message = attention.error;
+    } else if (delivery.state === "incomplete") {
+      message = `The request may still be missing work.${attention.error === null ? "" : ` ${attention.error}`}`;
+    } else {
+      const head = `${attention.title} ${attention.error === null ? "was cancelled" : "failed"}`;
+      message = attention.error === null ? head : `${head}: ${attention.error}`;
+    }
+    if (message !== null) parts.push(`<p class="request-error">${escapeHtml(message)}</p>`);
+    if (attention.action === "retry") {
+      parts.push(`<button type="button" data-action="retry" data-id="${escapeHtml(attention.id)}">Retry</button>`);
+    } else {
+      const text = `Finish the work still missing from: ${row.title}`;
+      parts.push(
+        `<button type="button" class="starter" data-action="starter" data-text="${escapeHtml(text)}">Ask for the rest</button>`,
+      );
+    }
+  }
+  if (row.status === "queued") {
+    parts.push(`<button type="button" data-action="cancel" data-id="${id}">Cancel</button>`);
+  }
+  parts.push("</li>");
+  return parts.join("");
+}
+
 function renderRow(row: RequestRow): string {
+  if (row.delivery !== null) return renderDeliveryRow(row, row.delivery);
   const id = escapeHtml(row.id);
   const progress = progressLabel(row.progress);
   const parts = [

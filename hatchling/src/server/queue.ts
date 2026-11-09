@@ -1,4 +1,18 @@
+import { EXHAUSTED_ROUNDS_PREFIX } from "../engine/nodes/enqueue.ts";
 import type { ListedWorkItem, Status } from "../engine/store.ts";
+
+export type Delivery = {
+  state:
+    | "planning"
+    | "building"
+    | "verifying"
+    | "delivered"
+    | "needs-attention"
+    | "incomplete"
+    | "failed"
+    | "cancelled";
+  attention: { id: string; title: string; error: string | null; action: "retry" | "ask-again" } | null;
+};
 
 export type RequestRow = {
   id: string;
@@ -9,6 +23,7 @@ export type RequestRow = {
   createdAt: string;
   progress: { done: number; total: number } | null;
   blockedBy: string[];
+  delivery: Delivery | null;
 };
 
 export type QueueSummary = { counts: Record<Status, number>; requests: RequestRow[] };
@@ -22,6 +37,48 @@ export function titleFromText(text: string): string {
   const chars = [...line.replace(/\s+/g, " ").trim()];
   if (chars.length <= MAX_TITLE) return chars.join("");
   return `${chars.slice(0, MAX_TITLE - 1).join("")}…`;
+}
+
+export function deliveryOf(parent: ListedWorkItem, children: ListedWorkItem[]): Delivery {
+  if (parent.status === "queued" || parent.status === "in_progress") return { state: "planning", attention: null };
+  if (parent.status === "failed") {
+    return {
+      state: "failed",
+      attention: { id: parent.id, title: parent.title, error: parent.error, action: "retry" },
+    };
+  }
+  if (parent.status === "cancelled") {
+    return {
+      state: "cancelled",
+      attention: { id: parent.id, title: parent.title, error: null, action: "retry" },
+    };
+  }
+  const broken = (c: ListedWorkItem) => c.status === "failed" || c.status === "cancelled";
+  const step = children.find((c) => c.kind === "item" && broken(c));
+  if (step !== undefined) {
+    return {
+      state: "needs-attention",
+      attention: { id: step.id, title: step.title, error: step.error, action: "retry" },
+    };
+  }
+  const verify = children.find((c) => c.kind === "verify" && broken(c));
+  if (verify !== undefined) {
+    const exhausted = verify.status === "failed" && verify.error?.startsWith(EXHAUSTED_ROUNDS_PREFIX) === true;
+    return {
+      state: exhausted ? "incomplete" : "needs-attention",
+      attention: {
+        id: verify.id,
+        title: verify.title,
+        error: verify.error,
+        action: exhausted ? "ask-again" : "retry",
+      },
+    };
+  }
+  if (children.some((c) => c.status === "queued" || c.status === "in_progress")) {
+    const onlyVerifications = children.filter((c) => c.kind === "item").every((c) => c.status === "done");
+    return { state: onlyVerifications ? "verifying" : "building", attention: null };
+  }
+  return { state: "delivered", attention: null };
 }
 
 export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
@@ -54,6 +111,7 @@ export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
       progress:
         steps.length === 0 ? null : { done: steps.filter((c) => c.status === "done").length, total: steps.length },
       blockedBy: item.blockedBy,
+      delivery: item.kind === "request" ? deliveryOf(item, children.get(item.id) ?? []) : null,
     });
     if (requests.length === MAX_ROWS) break;
   }
