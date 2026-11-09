@@ -96,7 +96,7 @@ describe("README.md", () => {
       line,
       "bash -s --",
       "node installer/main.ts init ../my-hatchling",
-      "ADAEGG_SOURCE=. sh install.sh",
+      "ADAEGG_SOURCE=. sh install.sh ../my-hatchling",
     ]) {
       expect(readme).toContain(text);
     }

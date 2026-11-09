@@ -109,7 +109,7 @@ To try the installer from a clone, no pnpm install or build is needed:
 node installer/main.ts init ../my-hatchling
 ```
 
-`ADAEGG_SOURCE=. sh install.sh my-hatchling` tests the install script from a clone.
+`ADAEGG_SOURCE=. sh install.sh ../my-hatchling` tests the install script from a clone.
 
 To work on the repository itself:
 
