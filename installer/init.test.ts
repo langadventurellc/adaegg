@@ -179,6 +179,25 @@ describe("runInit", () => {
     expect(s.calls).toEqual([]);
   });
 
+  it("explains a target whose parent is a file, and creates nothing", async () => {
+    const s = setup();
+    writeFileSync(join(s.cwd, "file"), "x");
+    const err = await runInit({ dir: "file/child", skipCheck: true }, s.deps).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InitError);
+    expect((err as InitError).message).toContain("is a file");
+    expect(s.calls).toEqual([]);
+    expect(readFileSync(join(s.cwd, "file"), "utf8")).toBe("x");
+  });
+
+  it("wraps a failure to create the target in an InitError", async () => {
+    const s = setup();
+    mkdirSync(join(s.cwd, "ro"), { mode: 0o500 });
+    if (process.getuid?.() === 0) return; // root ignores directory modes
+    const err = await runInit({ dir: "ro/child", skipCheck: true }, s.deps).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InitError);
+    expect((err as InitError).message).toContain("was left in place");
+  });
+
   it("refuses a folder inside another git repository", async () => {
     const s = setup();
     const repo = tmp("adaegg-outer-");

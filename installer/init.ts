@@ -70,6 +70,10 @@ function tail(output: string): string {
   return output.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
 }
 
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function quoteIfSpaced(path: string): string {
   return path.includes(" ") ? `"${path}"` : path;
 }
@@ -91,13 +95,23 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<voi
 
   const target = resolve(deps.cwd, options.dir);
   let probe = target;
-  if (existsSync(target)) {
-    if (!statSync(target).isDirectory() || readdirSync(target).length > 0) {
-      throw new InitError(`${target} is not empty; pick a new or empty folder.`);
+  try {
+    if (existsSync(target)) {
+      if (!statSync(target).isDirectory() || readdirSync(target).length > 0) {
+        throw new InitError(`${target} is not empty; pick a new or empty folder.`);
+      }
+    } else {
+      probe = dirname(target);
+      while (!existsSync(probe)) probe = dirname(probe);
+      if (!statSync(probe).isDirectory()) {
+        throw new InitError(`${probe} is a file, so ${target} cannot be created inside it; pick another folder.`);
+      }
     }
-  } else {
-    probe = dirname(target);
-    while (!existsSync(probe)) probe = dirname(probe);
+  } catch (err) {
+    if (err instanceof InitError) throw err;
+    throw new InitError(
+      `Cannot inspect ${target}: ${errorText(err)}. Check the path and its permissions, then try again.`,
+    );
   }
   let top: string | undefined;
   try {
@@ -112,8 +126,8 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<voi
   const templateDir = deps.templateDir ?? findTemplateDir(dirname(fileURLToPath(import.meta.url)));
   const npm = deps.npm ?? realNpm(deps.env);
 
-  mkdirSync(target, { recursive: true });
   try {
+    mkdirSync(target, { recursive: true });
     copyTemplate(templateDir, target);
 
     git(target, "init");
