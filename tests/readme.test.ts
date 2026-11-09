@@ -90,6 +90,19 @@ describe("README.md", () => {
     }
   });
 
+  it("gives an install route that works from a clone, before the npx route", () => {
+    for (const text of [
+      "git clone https://github.com/langadventurellc/adaegg",
+      "pnpm install",
+      "pnpm build",
+      "node bin/adaegg.mjs init",
+    ]) {
+      expect(readme).toContain(text);
+    }
+    expect(existsSync(join(repoRoot, "bin/adaegg.mjs"))).toBe(true);
+    expect(readme.indexOf("node bin/adaegg.mjs init")).toBeLessThan(readme.indexOf("npx adaegg init"));
+  });
+
   it("does not present Ada Egg as another company's product", () => {
     for (const text of ["built on Claude Code", "Claude Code Agent", "made by Anthropic"]) {
       expect(readme).not.toContain(text);
