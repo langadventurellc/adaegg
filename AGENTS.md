@@ -19,6 +19,7 @@ Later versions may add other agent providers, sharing or templates between hatch
 ## Layout
 
 - The repository root is Ada Egg's own development repo (pnpm, Biome, Vitest).
+- `README.md` is the public README for strangers; `LICENSE` is the MIT license.
 - `hatchling/` is the template that a setup command copies into a user's repo; it uses npm and has its own `biome.jsonc` and `tsconfig.json`.
 - `installer/` is the `adaegg init` source, compiled to `dist/installer` for publishing because Node does not strip types under `node_modules`.
 - `bin/adaegg.mjs` is the published `adaegg` entry; it imports the compiled `dist/installer/main.js`.
@@ -45,6 +46,7 @@ pnpm scan:history  # scan the whole git history for secrets and private names; r
 - ESM, strict TypeScript.
 - Small, focused modules.
 - Write tests with every change.
+- Keep README.md true: its quick start and safety section must match the installer and `hatchling/docs/system/agents.md`.
 - This repository is public. `tests/public-repo.test.ts` fails on secret-shaped strings, private hosts, IPs, home paths, internal tool names and unknown email addresses. To add a private term, add its ROT13 form to `scripts/public-scan.ts`; never write the term itself in a file or commit message.
 
 Before considering any change done: `pnpm lint && pnpm typecheck && pnpm test && pnpm build` must pass.
