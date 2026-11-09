@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
@@ -9,6 +10,7 @@ export type UiServer = { start(): Promise<{ url: string; port: number }>; stop()
 
 const MAX_BODY = 64 * 1024;
 const HOST = "127.0.0.1";
+const viteFailures = new AsyncLocalStorage<{ failed: boolean }>();
 
 type ViteDevServer = {
   middlewares: (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
@@ -102,7 +104,19 @@ export function createUiServer(opts: UiServerOptions): UiServer {
       return;
     }
     if (vite) {
-      vite.middlewares(req, res, () => sendJson(res, 404, { error: "not found" }));
+      // Vite's middleware-mode error handler logs and then calls next() without the error, so the
+      // logger hook below flags the request and the fallback tells a failure from a plain miss.
+      const failure = { failed: false };
+      const middlewares = vite.middlewares;
+      viteFailures.run(failure, () =>
+        middlewares(req, res, () => {
+          if (failure.failed) {
+            sendJson(res, 500, { error: "internal error" });
+          } else {
+            sendJson(res, 404, { error: "not found" });
+          }
+        }),
+      );
       return;
     }
     sendJson(res, 404, { error: "not found" });
@@ -142,13 +156,22 @@ export function createUiServer(opts: UiServerOptions): UiServer {
     boundPort = (server.address() as AddressInfo).port;
     if (useVite) {
       try {
-        const { createServer: createVite } = await import("vite");
+        const { createServer: createVite, createLogger } = await import("vite");
+        const logger = createLogger("warn");
+        const logError = logger.error.bind(logger);
+        logger.error = (msg, options) => {
+          const failure = viteFailures.getStore();
+          if (failure && options?.error) failure.failed = true;
+          logError(msg, options);
+        };
         vite = await createVite({
           root: opts.root,
-          server: { middlewareMode: { server }, watch: { ignored: ["**/.adaegg/**"] } },
+          // cors: false because Vite allows loopback origins by default and this server sends no CORS headers.
+          server: { middlewareMode: { server }, watch: { ignored: ["**/.adaegg/**"] }, cors: false },
           optimizeDeps: { entries: ["index.html"] },
           clearScreen: false,
           logLevel: "warn",
+          customLogger: logger,
         });
       } catch (err) {
         await closeHttp();

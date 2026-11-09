@@ -75,9 +75,10 @@ describe("daemon UI wiring", () => {
       events.push("db.close");
       close();
     };
+    const queued = addWorkItem(db, { title: "T", contents: "c" }).id;
     const ui = {
       start: vi.fn(async () => {
-        events.push("ui.start");
+        events.push(getWorkItem(db, queued)?.status === "queued" ? "ui.start before tick" : "ui.start");
         return { url: "http://127.0.0.1:1" };
       }),
       stop: vi.fn(async () => {

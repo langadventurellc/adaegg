@@ -36,7 +36,7 @@ export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
     }
   }
   const requests: RequestRow[] = [];
-  // listWorkItems is oldest first; walk it backwards so ties put the later-listed item first.
+  // Newest first by creation time; ties follow reverse input order (listWorkItems is oldest first).
   const ordered = items.map((item, index) => ({ item, index }));
   ordered.sort((a, b) =>
     a.item.createdAt === b.item.createdAt ? b.index - a.index : a.item.createdAt < b.item.createdAt ? 1 : -1,
