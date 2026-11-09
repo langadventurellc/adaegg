@@ -29,7 +29,7 @@ If the daemon prints workflow problems and exits 1, a file in `workflows/` is in
 
 ## The UI does not load
 
-1. Get the URL from `hatch status` (the `ui` line). If the default port was in use, the server fell back to a free one, so check the URL rather than assuming 4747.
+1. Get the URL from `hatch status` (the `ui` line). A foreground start also prints `<name> is running at <url> (press Ctrl-C to stop)`. If the hatchling's configured `ui.port` (4747 by default) was in use, the server fell back to a temporary free port, so check the URL rather than assuming the port.
 2. Look in the daemon's stderr (`.adaegg/logs/daemon.log`) for `UI failed to start`; the daemon keeps running without a UI then.
 3. Check that `ui.enabled` is not `false` in `adaegg.json`.
 4. After a self-change merge the daemon restarts and the page is briefly down; reload in a few seconds.

@@ -145,7 +145,12 @@ describe("createUiServer", () => {
     const second = await begin(first.port);
     expect(second.port).not.toBe(first.port);
     expect(second.url).toBe(`http://127.0.0.1:${second.port}`);
-    expect(write).toHaveBeenCalledWith(expect.stringContaining("is in use"));
+    const lines = write.mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith("ui:"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`(port ${first.port})`);
+    expect(lines[0]).toContain("is busy");
+    expect(lines[0]).toContain("temporary");
+    expect(lines[0]?.indexOf("\n")).toBe((lines[0]?.length ?? 0) - 1);
   });
 
   it("stops twice and then refuses connections", async () => {
