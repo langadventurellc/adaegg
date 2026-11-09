@@ -238,6 +238,18 @@ describe("list, show, cancel, retry, status", () => {
     expect(r.out.endsWith("cancelled  0\ndaemon  down\n")).toBe(true);
   });
 
+  it("shows the supervisor before the daemon when its pid is live", async () => {
+    writeSupervisor(process.pid);
+    const r = await hatch(["status"]);
+    expect(r.out.endsWith(`cancelled  0\nsupervisor  up (pid ${process.pid})\ndaemon  down\n`)).toBe(true);
+  });
+
+  it("shows no supervisor line when supervisor.json names a dead pid", async () => {
+    writeSupervisor(2147483646);
+    const r = await hatch(["status"]);
+    expect(r.out).not.toContain("supervisor");
+  });
+
   it("rejects an argument to start", async () => {
     expectOneLineError(await hatch(["start", "now"]), /unexpected argument: now/);
   });
@@ -246,6 +258,11 @@ describe("list, show, cancel, retry, status", () => {
 function writeReady(pid: number) {
   mkdirSync(state, { recursive: true });
   writeFileSync(join(state, "ready.json"), JSON.stringify({ pid, startedAt: "2026-01-01T00:00:00.000Z", head: "abc" }));
+}
+
+function writeSupervisor(pid: number) {
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(state, "supervisor.json"), JSON.stringify({ pid }));
 }
 
 describe("stop", () => {
@@ -306,8 +323,96 @@ describe("stop", () => {
     const kill = () => {
       throw Object.assign(new Error("no such process"), { code: "ESRCH" });
     };
-    const r = await hatch(["stop"], { stop: { kill, isPidAlive: () => true } });
+    let signalled = false;
+    const r = await hatch(["stop"], {
+      stop: {
+        kill: () => {
+          signalled = true;
+          kill();
+        },
+        isPidAlive: () => !signalled,
+      },
+    });
     expect(r).toEqual({ code: 0, out: "stopped\n", err: "" });
+  });
+
+  it("signals only a live supervisor and waits for it and the daemon", async () => {
+    writeSupervisor(111);
+    writeReady(222);
+    const kill = vi.fn();
+    const sleep = vi.fn(async () => {});
+    const polls = { supervisor: 0, daemon: 0 };
+    // The supervisor goes after 3 checks, the daemon outlives it by 3 more.
+    const isPidAlive = (pid: number) => {
+      const key = pid === 111 ? "supervisor" : "daemon";
+      polls[key]++;
+      return polls[key] <= (pid === 111 ? 3 : 6);
+    };
+    const r = await hatch(["stop"], { stop: { kill, sleep, isPidAlive } });
+    expect(r).toEqual({ code: 0, out: "stopped\n", err: "" });
+    expect(kill.mock.calls).toEqual([[111, "SIGTERM"]]);
+    expect(sleep).toHaveBeenCalledWith(200);
+    expect(polls.daemon).toBeGreaterThan(3);
+  });
+
+  it("signals a live supervisor when there is no ready.json", async () => {
+    writeSupervisor(111);
+    const kill = vi.fn();
+    let polls = 0;
+    const sleep = vi.fn(async () => {});
+    const r = await hatch(["stop"], { stop: { kill, sleep, isPidAlive: () => polls++ < 3 } });
+    expect(r).toEqual({ code: 0, out: "stopped\n", err: "" });
+    expect(kill.mock.calls).toEqual([[111, "SIGTERM"]]);
+    expect(sleep).toHaveBeenCalled();
+  });
+
+  it("falls through a stale supervisor.json to a live daemon", async () => {
+    writeSupervisor(111);
+    writeReady(222);
+    const kill = vi.fn();
+    let polls = 0;
+    const isPidAlive = (pid: number) => pid === 222 && polls++ < 2;
+    const r = await hatch(["stop"], { stop: { kill, sleep: async () => {}, isPidAlive } });
+    expect(r).toEqual({ code: 0, out: "stopped\n", err: "" });
+    expect(kill.mock.calls).toEqual([[222, "SIGTERM"]]);
+  });
+
+  it("says the daemon is down when supervisor.json is stale and nothing else is live", async () => {
+    writeSupervisor(111);
+    const kill = vi.fn();
+    const r = await hatch(["stop"], { stop: { kill, isPidAlive: () => false } });
+    expect(r).toEqual({ code: 0, out: "daemon  down\n", err: "" });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("times out naming the supervisor when it never exits", async () => {
+    writeSupervisor(111);
+    writeReady(222);
+    const kill = vi.fn();
+    let clock = 0;
+    const r = await hatch(["stop"], {
+      stop: {
+        kill,
+        isPidAlive: () => true,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        now: () => clock,
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/^hatch: supervisor \(pid 111\) did not stop[^\n]*\n$/);
+    expect(kill.mock.calls).toEqual([[111, "SIGTERM"]]);
+  });
+
+  it("refuses to start while a supervisor is recorded and alive", async () => {
+    writeSupervisor(111);
+    const r = await hatch(["start"], { stop: { isPidAlive: () => true } });
+    expect(r).toEqual({
+      code: 1,
+      out: "",
+      err: "hatch: a hatchling is already running here (pid 111); stop it with hatch stop\n",
+    });
   });
 
   it("is in the help and rejects an argument", async () => {

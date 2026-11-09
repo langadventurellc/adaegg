@@ -20,7 +20,7 @@ Every self-change stays covered. While `restart.json` exists the daemon claims n
 
 ## Readiness
 
-Once the workflows are loaded, the database is open and the first tick is done, the daemon writes `<state>/ready.json` (`{ pid, startedAt, head }`). It deletes it on a clean exit, and the supervisor deletes it before every start. `hatch status` prints `daemon  up` when `ready.json` exists and its pid is alive.
+Once the workflows are loaded, the database is open and the first tick is done, the daemon writes `<state>/ready.json` (`{ pid, startedAt, head }`). It deletes it on a clean exit, and the supervisor deletes it before every start. `hatch status` prints `daemon  up` when `ready.json` exists and its pid is alive. It also prints `supervisor  up` when `supervisor.json` names a live pid.
 
 ## The supervisor loop
 

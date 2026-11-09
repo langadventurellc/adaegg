@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { loadConfig } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
-import { isPidAlive, readReady } from "../engine/lifecycle.ts";
+import { isPidAlive, readReady, readSupervisor } from "../engine/lifecycle.ts";
 import { dbPath, findRepoRoot, stateDir } from "../engine/paths.ts";
 import { listNodeRuns, listRuns, listRunsForItem, type NodeRun, type Run } from "../engine/runs.ts";
 import {
@@ -55,12 +55,13 @@ Commands:
   runs [--limit n]      List the newest runs (default 20).
   cancel <id>           Cancel a queued item.
   retry <id>            Queue a failed or cancelled item again.
-  status                Count items per status, say whether the daemon is up and
-                        show the UI url when it is.
+  status                Count items per status, say whether the supervisor and the
+                        daemon are up and show the UI url when it is.
   start                 Run the daemon under a supervisor that restarts it after
                         a change to the hatchling's own code.
-  stop                  Stop the daemon (and with it the supervisor) and wait
-                        until it has exited.
+  stop                  Stop the hatchling: signals the supervisor (or the daemon
+                        when it runs alone) and waits until both have exited.
+                        Never reverts a merge.
 
 Ids may be abbreviated to a prefix of at least 4 characters.
 Options: -h, --help
@@ -302,6 +303,10 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       if (values.help) return void out(HELP);
       if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals[0]}`);
       const root = findRepoRoot(io.cwd);
+      const recorded = readSupervisor(stateDir(root, env));
+      if (recorded !== null && (io.stop?.isPidAlive ?? isPidAlive)(recorded.pid)) {
+        throw new Error(`a hatchling is already running here (pid ${recorded.pid}); stop it with hatch stop`);
+      }
       const code = await runSupervisor({
         root,
         stateDir: stateDir(root, env),
@@ -321,6 +326,8 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       try {
         const items = listWorkItems(db);
         out(STATUSES.map((s) => `${s}  ${items.filter((i) => i.status === s).length}\n`).join(""));
+        const supervisor = readSupervisor(stateDir(root, env));
+        if (supervisor !== null && isPidAlive(supervisor.pid)) out(`supervisor  up (pid ${supervisor.pid})\n`);
         const ready = readReady(stateDir(root, env));
         if (ready !== null && isPidAlive(ready.pid)) {
           out(`daemon  up (pid ${ready.pid})\n`);
@@ -343,21 +350,29 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
       const now = deps.now ?? Date.now;
       const timeoutMs = deps.timeoutMs ?? STOP_TIMEOUT_MS;
-      // ready.json holds the daemon's pid; its SIGTERM handler shuts down cleanly and the supervisor ends with it.
-      const ready = readReady(stateDir(findRepoRoot(io.cwd), env));
-      if (ready === null || !alive(ready.pid)) return void out("daemon  down\n");
-      const pid = ready.pid;
+      const dir = stateDir(findRepoRoot(io.cwd), env);
+      const supervisor = readSupervisor(dir);
+      const ready = readReady(dir);
+      // Signal the supervisor when there is one: SIGTERM to the daemon alone would count as a failed probation
+      // and revert the merge. A daemon started alone has no supervisor and gets the signal itself.
+      let target: { pid: number; what: string };
+      if (supervisor !== null && alive(supervisor.pid)) target = { pid: supervisor.pid, what: "supervisor" };
+      else if (ready !== null && alive(ready.pid)) target = { pid: ready.pid, what: "daemon" };
+      else return void out("daemon  down\n");
+      const waitFor = [{ ...target }];
+      if (target.what === "supervisor" && ready !== null) waitFor.push({ pid: ready.pid, what: "daemon" });
       try {
-        kill(pid, "SIGTERM");
+        kill(target.pid, "SIGTERM");
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
-        return void out("stopped\n");
       }
       const deadline = now() + timeoutMs;
-      while (alive(pid)) {
+      for (;;) {
+        const pending = waitFor.find((p) => alive(p.pid));
+        if (pending === undefined) break;
         if (now() >= deadline) {
           throw new Error(
-            `daemon (pid ${pid}) did not stop within ${Math.round(timeoutMs / 1000)}s; if it is stuck, kill it by hand with: kill ${pid}`,
+            `${pending.what} (pid ${pending.pid}) did not stop within ${Math.round(timeoutMs / 1000)}s; if it is stuck, kill it by hand with: kill ${pending.pid}`,
           );
         }
         await sleep(STOP_POLL_MS);
