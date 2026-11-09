@@ -13,7 +13,7 @@ Rules for the items (the same as for the planner):
 - Write each item's `contents` as a full spec: why, what to build, tests, docs, and done when. The implementer cannot ask questions.
 - Use `dependsOn` (the keys of earlier items) only for real dependencies. Let independent items stay independent.
 - Keys are lowercase kebab-case. Titles are at most 120 characters.
-- A request for a page (or for anything a person would use) is not delivered when nothing a person can open in the browser does it: no entry in `PAGES`, or not reachable from the Ask screen (see "Building what the user asks for" in `AGENTS.md`).
+- A request for a page, or for software that should become a page under "Building what the user asks for" in `AGENTS.md`, is not delivered when nothing a person can open in the browser does it: no entry in `PAGES`, or not reachable from the Ask screen. This does not apply to requests that explicitly ask for a command or for a change to the hatchling itself (its Ask screen, its workflows): those are delivered as asked, so do not ask for a page for them.
 
 Answer only with the plan as JSON, nothing else. Fully delivered:
 

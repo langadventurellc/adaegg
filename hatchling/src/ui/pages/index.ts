@@ -9,7 +9,8 @@ export interface Page {
   /** Shown in the "Your pages" list and as the tab title. */
   title: string;
   /** Draws the page into `root`. May return a cleanup function, called when the page is left. */
-  render(root: HTMLElement): undefined | (() => void);
+  // biome-ignore lint/suspicious/noConfusingVoidType: `undefined` would reject ordinary `(root) => void` renderers.
+  render(root: HTMLElement): void | (() => void);
 }
 
 export const PAGE_ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
