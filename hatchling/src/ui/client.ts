@@ -16,6 +16,8 @@ export class UnreachableError extends Error {
   }
 }
 
+export type PageDataItem = { key: string; value: unknown; updatedAt: string };
+
 export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
   async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
     const init: RequestInit =
@@ -46,7 +48,19 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
   const item = (id: string, action: "retry" | "cancel") =>
     call<{ id: string; status: string }>("POST", `/api/items/${encodeURIComponent(id)}/${action}`, {});
 
+  const pageData = (pageId: string) => {
+    const base = `/api/pages/${encodeURIComponent(pageId)}/data`;
+    const list = async () => (await call<{ items: PageDataItem[] }>("GET", base)).items;
+    return {
+      list,
+      get: async (key: string): Promise<unknown> => (await list()).find((entry) => entry.key === key)?.value,
+      set: (key: string, value: unknown) => call<PageDataItem>("POST", `${base}/${encodeURIComponent(key)}`, { value }),
+      remove: (key: string) => call<{ key: string }>("POST", `${base}/${encodeURIComponent(key)}/delete`, {}),
+    };
+  };
+
   return {
+    pageData,
     getState: () => call<StateResponse>("GET", "/api/state"),
     setName: (name: string) => call<{ name: string }>("POST", "/api/name", { name }),
     ask: (text: string) => call<{ id: string; title: string }>("POST", "/api/ask", { text }),
@@ -54,3 +68,6 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     cancel: (id: string) => item(id, "cancel"),
   };
 }
+
+// For page code: `pageData("water").set("today", 3)`.
+export const pageData = (pageId: string) => createClient("").pageData(pageId);

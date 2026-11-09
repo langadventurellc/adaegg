@@ -22,6 +22,9 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
 | `POST /api/ask` | `{ text }` | 201 `{ id, title }`: creates a work item of kind `request` |
 | `POST /api/items/<id>/retry` | `{}` | 200 `{ id, status }` with `status` `"queued"`; 404 unknown id; 409 when the item cannot be retried |
 | `POST /api/items/<id>/cancel` | `{}` | 200 `{ id, status }` with `status` `"cancelled"`; 404 unknown id; 409 when the item cannot be cancelled |
+| `GET /api/pages/<page>/data` | | 200 `{ items: { key, value, updatedAt }[] }`, ordered by key; 400 when `<page>` is not 1-64 letters, digits, `-` or `_` |
+| `POST /api/pages/<page>/data/<key>` | `{ value }` (any JSON, including `null`) | 200 `{ key, value, updatedAt }`; 400 for a bad `<page>`, `<key>` or a body without `value`; 413 when the value is over 64 KiB |
+| `POST /api/pages/<page>/data/<key>/delete` | `{}` | 200 `{ key }`; 400 for a bad `<page>` or `<key>`; 404 when the key does not exist |
 
 `GET /api/state` shapes:
 
@@ -67,6 +70,7 @@ Software built for the user lives in pages. The registry is `PAGES` in `src/ui/p
 - Routes are by hash, parsed by `routeFor` in `view.ts`: `#/` (or empty) is the Ask screen, `#/<id>` is that page under a small header linking back to `Ask <name>`. An unknown id shows "This page doesn't exist." with the same link.
 - Onboarding wins: while no name is set (or during a rename) onboarding shows whatever the hash is.
 - The Ask screen lists the pages in a "Your pages" section above "Your requests", one link per page by title. With no pages the section is not shown.
+- A page keeps its data in the hatchling's database, through the `page_data` table (`src/engine/page-data.ts`), the three `/api/pages/` routes and the `pageData(<page id>)` client in `src/ui/client.ts`, never in `localStorage` or files. Values are any JSON; each page owns its shape.
 - Polling on a page refreshes only the banner, never the page. A page whose `render` throws shows the error text instead, and the shell keeps working.
 
 ## Files
@@ -91,6 +95,6 @@ The pure modules (`view.ts`, `state.ts`, `client.ts`, `starters.ts`) are tested.
 
 ## State and restarts
 
-The name lives in the `settings` table (`src/engine/settings.ts`), not in `adaegg.json`: changing a tracked file dirties the checkout the merge node needs clean.
+Page data lives in the `page_data` table (`src/engine/page-data.ts`), so it survives restarts. The name lives in the `settings` table (`src/engine/settings.ts`), not in `adaegg.json`: changing a tracked file dirties the checkout the merge node needs clean.
 
 A change under `src/` restarts the daemon after its merge, so the page is briefly unreachable (see [restart and rollback](restart-and-rollback.md)).

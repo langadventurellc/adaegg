@@ -70,6 +70,43 @@ describe("createClient against the real server", () => {
     expect(err.status).toBe(409);
   });
 
+  it("pageData sets, gets, lists, overwrites and removes", async () => {
+    const water = client.pageData("water");
+    expect(await water.get("today")).toBeUndefined();
+    const set = await water.set("today", { cups: 1 });
+    expect(set).toMatchObject({ key: "today", value: { cups: 1 } });
+    expect(await water.get("today")).toEqual({ cups: 1 });
+    await water.set("today", { cups: 2 });
+    expect(await water.list()).toMatchObject([{ key: "today", value: { cups: 2 } }]);
+    expect(await water.remove("today")).toEqual({ key: "today" });
+    expect(await water.list()).toEqual([]);
+  });
+
+  it("pageData keeps pages apart", async () => {
+    await client.pageData("water").set("k", 1);
+    await client.pageData("journal").set("k", 2);
+    expect(await client.pageData("water").get("k")).toBe(1);
+    expect(await client.pageData("journal").get("k")).toBe(2);
+  });
+
+  it("pageData remove of a missing key throws ApiError 404", async () => {
+    const err = await client
+      .pageData("water")
+      .remove("nope")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it("pageData with a bad page id throws ApiError 400", async () => {
+    const err = await client
+      .pageData("Bad Page")
+      .list()
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
   it("every method throws UnreachableError after stop", async () => {
     await server.stop();
     for (const call of [
@@ -78,6 +115,10 @@ describe("createClient against the real server", () => {
       () => client.ask("hi"),
       () => client.retry("abcd1234"),
       () => client.cancel("abcd1234"),
+      () => client.pageData("water").list(),
+      () => client.pageData("water").get("today"),
+      () => client.pageData("water").set("today", 1),
+      () => client.pageData("water").remove("today"),
     ]) {
       await expect(call()).rejects.toBeInstanceOf(UnreachableError);
     }

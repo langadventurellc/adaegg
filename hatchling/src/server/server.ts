@@ -3,12 +3,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo, Socket } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
 import { handleApi } from "./api.ts";
-import { checkRequest } from "./guard.ts";
+import { checkRequest, MAX_BODY_BYTES } from "./guard.ts";
 
 export type UiServerOptions = { db: DatabaseSync; root: string; port: number; vite?: boolean };
 export type UiServer = { start(): Promise<{ url: string; port: number }>; stop(): Promise<void> };
 
-const MAX_BODY = 64 * 1024;
 const HOST = "127.0.0.1";
 const viteFailures = new AsyncLocalStorage<{ failed: boolean }>();
 
@@ -32,7 +31,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown, extra: Rec
 
 type BodyResult = { ok: true; raw: string } | { ok: false };
 
-// Reads at most MAX_BODY bytes; past that it answers 413, closes the connection and reads no more.
+// Reads at most MAX_BODY_BYTES bytes; past that it answers 413, closes the connection and reads no more.
 function readBody(req: IncomingMessage, res: ServerResponse): Promise<BodyResult> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -41,7 +40,7 @@ function readBody(req: IncomingMessage, res: ServerResponse): Promise<BodyResult
     req.on("data", (chunk: Buffer) => {
       if (done) return;
       size += chunk.length;
-      if (size > MAX_BODY) {
+      if (size > MAX_BODY_BYTES) {
         done = true;
         chunks.length = 0;
         req.pause();
