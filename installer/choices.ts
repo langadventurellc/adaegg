@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { InitError } from "./init.ts";
@@ -23,13 +24,23 @@ export function folderFor(name: string): string {
 }
 
 // The specifiers are not literals so the installer build does not compile the template's files.
+// Node refuses to strip types from files under node_modules, which is where an npm-installed
+// template lives, so the names files are copied from the template to a temporary folder to load.
+// The template stays the only source of the names.
 export async function loadNames(templateDir: string): Promise<Names> {
-  const load = async (file: string): Promise<unknown> =>
-    import(pathToFileURL(join(templateDir, "src/names", file)).href);
-  const suggestModule = (await load("suggest.ts")) as {
-    pickSuggestions(random: () => number, count?: number): { name: string }[];
-  };
-  const validateModule = (await load("validate.ts")) as { validateName(raw: string): NameValidation };
+  const scratch = mkdtempSync(join(tmpdir(), "adaegg-names-"));
+  let suggestModule: { pickSuggestions(random: () => number, count?: number): { name: string }[] };
+  let validateModule: { validateName(raw: string): NameValidation };
+  try {
+    for (const file of ["names.ts", "suggest.ts", "validate.ts"]) {
+      copyFileSync(join(templateDir, "src/names", file), join(scratch, file));
+    }
+    const load = async (file: string): Promise<unknown> => import(pathToFileURL(join(scratch, file)).href);
+    suggestModule = (await load("suggest.ts")) as typeof suggestModule;
+    validateModule = (await load("validate.ts")) as typeof validateModule;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
   return {
     suggest: (random = Math.random) => (suggestModule.pickSuggestions(random, 1)[0] as { name: string }).name,
     validate: validateModule.validateName,

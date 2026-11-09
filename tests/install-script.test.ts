@@ -95,7 +95,8 @@ done`,
 function run(bin: string, args: string[], env: Record<string, string> = {}, cwd = tempDir(), input?: string) {
   const result = spawnSync("/bin/sh", input === undefined ? [script, ...args] : ["-s", "--", ...args], {
     cwd,
-    env: { PATH: bin, HOME: cwd, ...env },
+    // Never let a test reach the real /dev/tty.
+    env: { PATH: bin, HOME: cwd, ADAEGG_TTY: join(cwd, "no-such-tty"), ...env },
     encoding: "utf8",
     input: input ?? "",
   });

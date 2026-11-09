@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,18 @@ describe("folderFor", () => {
     expect(folderFor("Zoë")).toBe("zoe");
     expect(folderFor("O’Neil")).toBe("o-neil");
     expect(folderFor("   ")).toBe("hatchling");
+  });
+});
+
+describe("loadNames", () => {
+  it("loads from a template under node_modules, where Node will not strip types", async () => {
+    const root = tmp();
+    const installed = join(root, "node_modules", "adaegg", "hatchling");
+    mkdirSync(join(installed, "src", "names"), { recursive: true });
+    cpSync(join(templateDir, "src", "names"), join(installed, "src", "names"), { recursive: true });
+    const names = await loadNames(installed);
+    expect(names.validate("Pip")).toEqual({ ok: true, name: "Pip" });
+    expect(names.suggest(() => 0)).not.toBe("");
   });
 });
 
