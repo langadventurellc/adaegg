@@ -61,7 +61,7 @@ The repository is local only. Nothing is pushed anywhere. You may add your own r
 
 ## How a request becomes software
 
-Everything you ask becomes a *request*. A planner agent splits it into a chain of items, and each item goes through the `implement` workflow. A verification then checks the result.
+Everything you ask becomes a *request*. A planner agent splits it into a chain of items, and each item goes through the `implement` workflow. A verification then checks the result. What you ask for shows up as a page under "Your pages" on the Ask screen.
 
 - request: what you typed in the UI
   - plan: a planner agent splits it into a chain of items

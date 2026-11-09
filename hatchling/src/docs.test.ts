@@ -308,4 +308,19 @@ describe("the real docs", () => {
   it("keep HELP and COMMANDS in step", () => {
     for (const command of COMMANDS) expect(HELP).toContain(`  ${command}`);
   });
+
+  it("give the planner and verifier page-shaped examples", () => {
+    for (const file of ["plan.md", "verify.md"]) {
+      const text = readFileSync(join(hatchlingRoot, "prompts", file), "utf8");
+      expect(text).not.toMatch(/greeting|hello/i);
+      expect(text).toContain("tip calculator page");
+      expect(text).toContain("AGENTS.md");
+    }
+  });
+
+  it("tell the agents in AGENTS.md to build pages", () => {
+    const agents = readFileSync(join(hatchlingRoot, "AGENTS.md"), "utf8");
+    expect(agents).toContain("## Building what the user asks for");
+    expect(agents.split("`src/ui/pages/").length - 1).toBeGreaterThanOrEqual(2);
+  });
 });

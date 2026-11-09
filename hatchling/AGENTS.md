@@ -12,6 +12,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `prompts/`: the role prompts the agent nodes send.
 - `src/server/`: the local UI server: guard, API, queue summary and Vite middleware.
 - `src/ui/`: the browser UI (onboarding and Ask screens, plain TypeScript), served by `src/server/`.
+- `src/ui/pages/`: the pages built for the user: one folder per page with its pure logic and tests, registered in `PAGES` in `src/ui/pages/index.ts`.
 - `src/names/`: the names list, the suggestion picker and name validation for onboarding.
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
 - `README.md`: for people using this repo.
@@ -22,6 +23,10 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 ## Before you finish
 
 `npm run check` (lint, typecheck, tests, build) must pass.
+
+## Building what the user asks for
+
+Requests asked in the UI come from a person using a browser. Unless they ask for something else (a command, or a change to the hatchling itself, such as its Ask screen or its workflows), what they ask for is built as a page in `src/ui/pages/<id>/`, registered in `PAGES` and reachable from the Ask screen under "Your pages". The `hatch` CLI is for operating the hatchling, not for the user's features. See the Pages section of [ui](docs/system/ui.md).
 
 ## The `hatch` CLI
 
