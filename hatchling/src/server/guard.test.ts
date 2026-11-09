@@ -51,8 +51,14 @@ describe("checkRequest methods", () => {
     expect(req("POST", { host, ...json })).toBeNull();
   });
 
-  it("answers 405 for PUT and DELETE", () => {
+  it("answers 405 for PUT and DELETE once content type and Origin pass", () => {
     expect(req("PUT", { host, ...json })?.status).toBe(405);
-    expect(req("DELETE", { host })?.status).toBe(405);
+    expect(req("DELETE", { host, ...json, origin: "http://localhost:4747" })?.status).toBe(405);
+  });
+
+  it("checks content type and Origin before the method", () => {
+    expect(req("DELETE", { host })?.status).toBe(415);
+    expect(req("PUT", { host, "content-type": "text/plain" })?.status).toBe(415);
+    expect(req("PUT", { host, ...json, origin: "http://evil.example" })?.status).toBe(403);
   });
 });

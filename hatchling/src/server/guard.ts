@@ -15,7 +15,6 @@ export function checkRequest(req: GuardRequest): GuardRefusal | null {
   }
   const method = req.method.toUpperCase();
   if (method === "GET" || method === "HEAD") return null;
-  if (method !== "POST") return { status: 405, error: "method not allowed" };
   const contentType = req.headers["content-type"];
   const mediaType = typeof contentType === "string" ? (contentType.split(";")[0] as string).trim().toLowerCase() : "";
   if (mediaType !== "application/json") return { status: 415, error: "content type must be application/json" };
@@ -23,5 +22,6 @@ export function checkRequest(req: GuardRequest): GuardRefusal | null {
   if (origin !== undefined && (typeof origin !== "string" || origin.toLowerCase() !== `http://${host.toLowerCase()}`)) {
     return { status: 403, error: "forbidden origin" };
   }
+  if (method !== "POST") return { status: 405, error: "method not allowed" };
   return null;
 }

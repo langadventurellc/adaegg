@@ -45,7 +45,7 @@ Every request, API or Vite, passes `checkRequest` in `src/server/guard.ts` first
 
 - `Host` must be `localhost:<port>` or `127.0.0.1:<port>` (403 otherwise). This stops DNS rebinding, where a hostile page makes the browser send requests to 127.0.0.1 with its own hostname.
 - Any method other than GET and HEAD needs `Content-Type: application/json` (415), and an `Origin` header, when present, must equal `http://<Host>` (403). A cross-site form or fetch cannot send JSON without a CORS preflight, and the server never answers preflights and sends no CORS headers.
-- Only GET, HEAD and POST are allowed (405).
+- Only GET, HEAD and POST are allowed (405). This check comes last, so a PUT or DELETE without JSON gets 415 and one with a foreign Origin gets 403.
 
 There is no login. Anyone who can open 127.0.0.1 on this machine can queue work, and agents run with the user's permissions.
 
