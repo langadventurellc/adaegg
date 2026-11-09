@@ -158,6 +158,19 @@ button:disabled {
   padding: 0 0.5rem;
 }
 
+.request[data-status="needs-attention"] .status,
+.request[data-status="incomplete"] .status,
+.request[data-status="failed"] .status {
+  border: 2px dashed CanvasText;
+}
+
+.request[data-status="delivered"] .status,
+.request[data-status="cancelled"] .status {
+  font-weight: 400;
+  border-color: GrayText;
+  color: GrayText;
+}
+
 .progress {
   color: GrayText;
 }
