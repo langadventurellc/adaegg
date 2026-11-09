@@ -1,7 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type Ask, chooseDir, chooseName, loadNames } from "./choices.ts";
 
 export class InitError extends Error {}
 
@@ -10,9 +12,15 @@ export const GITIGNORE = "node_modules/\ndist/\n.adaegg/\n";
 const MIN_NODE_MAJOR = 24;
 const TAIL_LINES = 40;
 
-export type InitOptions = { dir: string; skipCheck: boolean };
+export type InitOptions = { name?: string; dir?: string; skipCheck: boolean; noStart: boolean };
 
 export type NpmResult = { ok: boolean; output: string };
+
+export type RunNode = (
+  args: string[],
+  cwd: string,
+  mode: "capture" | "inherit",
+) => Promise<{ code: number; output: string }>;
 
 export type InitDeps = {
   cwd: string;
@@ -22,6 +30,14 @@ export type InitDeps = {
   nodeVersion?: string;
   templateDir?: string;
   npm?: (args: string[], cwd: string) => Promise<NpmResult>;
+  isInteractive?: boolean;
+  ask?: Ask;
+  // Called once no more questions will be asked, before the hatchling starts, so a terminal
+  // left in raw mode by the prompt does not swallow the child's Ctrl-C.
+  closeInput?: () => void;
+  home?: string;
+  random?: () => number;
+  runNode?: RunNode;
 };
 
 // Copies the template into `target` without build output, state or the template's own git data,
@@ -66,6 +82,26 @@ function realNpm(env: NodeJS.ProcessEnv): (args: string[], cwd: string) => Promi
     });
 }
 
+function realRunNode(env: NodeJS.ProcessEnv): RunNode {
+  return (args, cwd, mode) =>
+    new Promise((resolvePromise) => {
+      let output = "";
+      const child = spawn(process.execPath, args, {
+        cwd,
+        env,
+        stdio: mode === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
+      });
+      child.stdout?.on("data", (chunk) => {
+        output += String(chunk);
+      });
+      child.stderr?.on("data", (chunk) => {
+        output += String(chunk);
+      });
+      child.on("error", (err) => resolvePromise({ code: 1, output: err.message }));
+      child.on("close", (code) => resolvePromise({ code: code ?? 1, output }));
+    });
+}
+
 function tail(output: string): string {
   return output.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
 }
@@ -78,7 +114,7 @@ function quoteIfSpaced(path: string): string {
   return path.includes(" ") ? `"${path}"` : path;
 }
 
-export async function runInit(options: InitOptions, deps: InitDeps): Promise<void> {
+export async function runInit(options: InitOptions, deps: InitDeps): Promise<number> {
   const out = (text: string) => deps.stdout.write(`${text}\n`);
   const git = (cwd: string, ...args: string[]): string =>
     execFileSync("git", args, { cwd, env: deps.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -93,7 +129,29 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<voi
     throw new InitError("git is required; install it from https://git-scm.com and try again.");
   }
 
-  const target = resolve(deps.cwd, options.dir);
+  const templateDir = deps.templateDir ?? findTemplateDir(dirname(fileURLToPath(import.meta.url)));
+  const names = await loadNames(templateDir);
+  const interactive = deps.isInteractive === true && deps.ask !== undefined;
+  const ask: Ask = deps.ask ?? (async () => "");
+  const name = await chooseName({
+    name: options.name,
+    interactive,
+    ask,
+    out: (text) => deps.stdout.write(`${text}\n`),
+    suggestion: names.suggest(deps.random),
+    validate: names.validate,
+  });
+  const chosen = await chooseDir({
+    dir: options.dir,
+    name,
+    cwd: deps.cwd,
+    home: deps.home ?? deps.env.HOME ?? homedir(),
+    interactive,
+    ask,
+    out: (text) => deps.stdout.write(`${text}\n`),
+  });
+  deps.closeInput?.();
+  const target = chosen.dir;
   let probe = target;
   try {
     if (existsSync(target)) {
@@ -123,9 +181,10 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<voi
     throw new InitError(`${target} is inside the git repository ${top}; pick a folder outside it.`);
   }
 
-  const templateDir = deps.templateDir ?? findTemplateDir(dirname(fileURLToPath(import.meta.url)));
   const npm = deps.npm ?? realNpm(deps.env);
+  const runNode = deps.runNode ?? realRunNode(deps.env);
 
+  out(`Creating ${name} in ${target} …`);
   try {
     mkdirSync(target, { recursive: true });
     copyTemplate(templateDir, target);
@@ -154,6 +213,9 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<voi
     const install = await npm(["install", "--no-audit", "--no-fund"], target);
     if (!install.ok) throw new InitError(`npm install failed:\n${tail(install.output)}`);
 
+    const named = await runNode(["src/cli/main.ts", "name", name], target, "capture");
+    if (named.code !== 0) throw new InitError(`Setting the name failed:\n${tail(named.output)}`);
+
     git(target, "add", "-A");
     git(target, "commit", "-m", "Create hatchling");
 
@@ -172,13 +234,11 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<voi
   }
 
   out("");
-  out(`Your hatchling is ready in ${target}`);
-  out("");
-  out(`  cd ${quoteIfSpaced(target)}`);
-  out("  npm start");
-  out("");
-  out(
-    "Then look for the line `hatchling UI: <url>` (or run `npm run hatch -- status`), open it, name your hatchling and ask for what you want.",
-  );
+  out(`${name} is ready in ${target}`);
   out("Agents use your Claude login (run `claude` once) or ANTHROPIC_API_KEY; Ada Egg never handles either.");
+  out(`Start it again later: cd ${quoteIfSpaced(target)} && npm start, or ask your coding agent to start it.`);
+  if (options.noStart) return 0;
+  out("");
+  const started = await runNode(["src/cli/main.ts", "start", "--open"], target, "inherit");
+  return started.code;
 }

@@ -4,7 +4,19 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { findTemplateDir, GITIGNORE, type InitDeps, InitError, runInit } from "./init.ts";
+import { folderFor, loadNames } from "./choices.ts";
+import {
+  findTemplateDir,
+  GITIGNORE,
+  type InitDeps,
+  InitError,
+  type InitOptions,
+  runInit as realRunInit,
+} from "./init.ts";
+
+// Most tests only care about installing, so they default to not starting the hatchling.
+const runInit = (options: Partial<InitOptions>, deps: InitDeps) =>
+  realRunInit({ skipCheck: false, noStart: true, ...options }, deps);
 
 const templateDir = join(dirname(fileURLToPath(import.meta.url)), "..", "hatchling");
 
@@ -25,7 +37,17 @@ function git(cwd: string, env: NodeJS.ProcessEnv, ...args: string[]): string {
 
 type Npm = NonNullable<InitDeps["npm"]>;
 
-function setup(opts: { globalConfig?: string; failOn?: "install" | "check"; failLines?: number } = {}) {
+type RunNodeCall = { args: string[]; cwd: string; mode: string };
+
+function setup(
+  opts: {
+    globalConfig?: string;
+    failOn?: "install" | "check";
+    failLines?: number;
+    nameFails?: boolean;
+    startCode?: number;
+  } = {},
+) {
   const home = tmp("adaegg-home-");
   const globalFile = join(home, "gitconfig");
   writeFileSync(globalFile, opts.globalConfig ?? "");
@@ -49,15 +71,32 @@ function setup(opts: { globalConfig?: string; failOn?: "install" | "check"; fail
     if (kind === "install") writeFileSync(join(at, "package-lock.json"), '{"lockfileVersion":3}\n');
     return { ok: true, output: "" };
   };
+  const nodeCalls: RunNodeCall[] = [];
+  const order: string[] = [];
+  const runNode: NonNullable<InitDeps["runNode"]> = async (args, at, mode) => {
+    nodeCalls.push({ args, cwd: at, mode });
+    order.push(`node ${args[1]}`);
+    if (args[1] === "name" && opts.nameFails) return { code: 1, output: "name boom\n" };
+    if (args[1] === "start") return { code: opts.startCode ?? 0, output: "" };
+    return { code: 0, output: "" };
+  };
+  const trackedNpm: Npm = async (args, at) => {
+    order.push(`npm ${args[0]}`);
+    return npm(args, at);
+  };
   const deps: InitDeps = {
     cwd,
     env,
     stdout: { write: (t) => out.push(t) },
     stderr: { write: (t) => out.push(t) },
     templateDir,
-    npm,
+    npm: trackedNpm,
+    isInteractive: false,
+    home,
+    random: () => 0,
+    runNode,
   };
-  return { deps, env, cwd, calls, out, text: () => out.join("") };
+  return { deps, env, cwd, home, calls, nodeCalls, order, out, text: () => out.join("") };
 }
 
 describe("runInit", () => {
@@ -87,6 +126,10 @@ describe("runInit", () => {
     for (const p of ["node_modules/x", "dist/y", "src/dist/z", ".adaegg/w", ".git/HEAD"]) {
       mkdirSync(dirname(join(tpl, p)), { recursive: true });
       writeFileSync(join(tpl, p), "x");
+    }
+    mkdirSync(join(tpl, "src", "names"), { recursive: true });
+    for (const f of ["names.ts", "suggest.ts", "validate.ts"]) {
+      writeFileSync(join(tpl, "src", "names", f), readFileSync(join(templateDir, "src", "names", f)));
     }
     writeFileSync(join(tpl, "package-lock.json"), "{}");
     writeFileSync(join(tpl, "adaegg.json"), "{}");
@@ -237,13 +280,142 @@ describe("runInit", () => {
     const s = setup();
     await runInit({ dir: "mine", skipCheck: false }, s.deps);
     const text = s.text();
-    for (const word of ["cd ", "npm start", "hatchling UI", "ANTHROPIC_API_KEY"]) expect(text).toContain(word);
+    for (const word of ["Start it again later: cd ", "npm start", "ask your coding agent", "ANTHROPIC_API_KEY"]) {
+      expect(text).toContain(word);
+    }
+    expect(text).not.toContain("hatchling UI");
   });
 
   it("quotes a path with a space in the cd line", async () => {
     const s = setup();
     await runInit({ dir: "my hatchling", skipCheck: true }, s.deps);
     expect(s.text()).toContain(`cd "${join(s.cwd, "my hatchling")}"`);
+  });
+});
+
+function answers(list: string[]) {
+  const asked: string[] = [];
+  const ask = async (question: string) => {
+    asked.push(question);
+    const next = list.shift();
+    if (next === undefined) throw new Error(`unexpected question: ${question}`);
+    return next;
+  };
+  return { ask, asked };
+}
+
+describe("runInit name and folder", () => {
+  it("asks for both and takes the suggestions on Enter", async () => {
+    const s = setup();
+    const suggestion = (await loadNames(templateDir)).suggest(() => 0);
+    const a = answers(["", ""]);
+    await runInit({}, { ...s.deps, isInteractive: true, ask: a.ask });
+    const target = join(s.cwd, folderFor(suggestion));
+    expect(a.asked).toEqual([
+      `Name your hatchling [${suggestion}]: `,
+      `Where should ${suggestion} live? [${target}]: `,
+    ]);
+    expect(existsSync(join(target, "adaegg.json"))).toBe(true);
+    expect(s.nodeCalls[0]?.args).toEqual(["src/cli/main.ts", "name", suggestion]);
+    expect(s.text()).toContain(`Creating ${suggestion} in ${target}`);
+  });
+
+  it("treats a missing ask as non-interactive", async () => {
+    const s = setup();
+    await runInit({ name: "Pip" }, { ...s.deps, isInteractive: true });
+    expect(existsSync(join(s.cwd, "pip", "adaegg.json"))).toBe(true);
+  });
+
+  it("re-asks an invalid name with the validation error", async () => {
+    const s = setup();
+    const a = answers(["3pip", "Pip", ""]);
+    await runInit({}, { ...s.deps, isInteractive: true, ask: a.ask });
+    expect(a.asked.filter((q) => q.startsWith("Name your hatchling"))).toHaveLength(2);
+    const rejected = (await loadNames(templateDir)).validate("3pip");
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(s.text()).toContain(rejected.error);
+    expect(existsSync(join(s.cwd, "pip", "adaegg.json"))).toBe(true);
+  });
+
+  it("re-asks a folder that is not empty", async () => {
+    const s = setup();
+    mkdirSync(join(s.cwd, "taken"));
+    writeFileSync(join(s.cwd, "taken", "a"), "x");
+    const a = answers(["Pip", "taken", "free"]);
+    await runInit({}, { ...s.deps, isInteractive: true, ask: a.ask });
+    expect(s.text()).toContain("is not empty");
+    expect(existsSync(join(s.cwd, "free", "adaegg.json"))).toBe(true);
+  });
+
+  it("expands ~ to the home directory", async () => {
+    const s = setup();
+    const a = answers(["Pip", "~/x"]);
+    await runInit({}, { ...s.deps, isInteractive: true, ask: a.ask });
+    expect(existsSync(join(s.home, "x", "adaegg.json"))).toBe(true);
+  });
+
+  it("without a terminal creates ./<slug>, then ./<slug>-2 when that is taken", async () => {
+    const s = setup();
+    await runInit({ name: "Pip Moss" }, s.deps);
+    expect(existsSync(join(s.cwd, "pip-moss", "adaegg.json"))).toBe(true);
+    await runInit({ name: "Pip Moss" }, s.deps);
+    expect(existsSync(join(s.cwd, "pip-moss-2", "adaegg.json"))).toBe(true);
+  });
+
+  it("rejects an explicit dir that is not empty", async () => {
+    const s = setup();
+    mkdirSync(join(s.cwd, "pip-moss"));
+    writeFileSync(join(s.cwd, "pip-moss", "a"), "x");
+    await expect(runInit({ name: "Pip Moss", dir: "pip-moss" }, s.deps)).rejects.toThrow("is not empty");
+  });
+});
+
+describe("runInit name command and start", () => {
+  it("sets the name through the repo's CLI after npm install and before the commit", async () => {
+    const s = setup();
+    await runInit({ name: "Pip Moss", dir: "mine" }, s.deps);
+    const target = join(s.cwd, "mine");
+    expect(s.nodeCalls).toEqual([{ args: ["src/cli/main.ts", "name", "Pip Moss"], cwd: target, mode: "capture" }]);
+    expect(s.order).toEqual(["npm install", "node name", "npm run"]);
+    expect(git(target, s.env, "log", "--format=%s")).toBe("Create hatchling");
+  });
+
+  it("reports a failing name command with its output", async () => {
+    const s = setup({ nameFails: true });
+    const err = await runInit({ name: "Pip", dir: "mine" }, s.deps).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InitError);
+    expect((err as Error).message).toContain("Setting the name failed:\nname boom");
+    expect((err as Error).message).toContain("left in place");
+  });
+
+  it("does not start with noStart", async () => {
+    const s = setup();
+    expect(await runInit({ name: "Pip", dir: "mine", noStart: true }, s.deps)).toBe(0);
+    expect(s.nodeCalls.some((c) => c.args[1] === "start")).toBe(false);
+    expect(s.text()).toContain("Start it again later:");
+  });
+
+  it("starts last with inherited stdio and returns its exit code", async () => {
+    const s = setup({ startCode: 3 });
+    expect(await runInit({ name: "Pip", dir: "mine", noStart: false }, s.deps)).toBe(3);
+    expect(s.nodeCalls.at(-1)).toEqual({
+      args: ["src/cli/main.ts", "start", "--open"],
+      cwd: join(s.cwd, "mine"),
+      mode: "inherit",
+    });
+    expect(s.order.at(-1)).toBe("node start");
+  });
+
+  it("does not start when the check fails", async () => {
+    const s = setup({ failOn: "check" });
+    await expect(runInit({ name: "Pip", dir: "mine", noStart: false }, s.deps)).rejects.toThrow(InitError);
+    expect(s.nodeCalls.some((c) => c.args[1] === "start")).toBe(false);
+  });
+
+  it("starts even with skipCheck", async () => {
+    const s = setup();
+    expect(await runInit({ name: "Pip", dir: "mine", noStart: false, skipCheck: true }, s.deps)).toBe(0);
+    expect(s.nodeCalls.at(-1)?.args[1]).toBe("start");
   });
 });
 

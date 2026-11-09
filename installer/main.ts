@@ -1,19 +1,28 @@
 import { realpathSync } from "node:fs";
+import { createInterface, type Interface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { runInit } from "./init.ts";
+import type { Ask } from "./choices.ts";
+import { InitError, runInit } from "./init.ts";
 
 export type CliIo = {
   stdout: { write(text: string): unknown };
   stderr: { write(text: string): unknown };
   cwd: string;
   env: NodeJS.ProcessEnv;
+  isInteractive?: boolean;
+  ask?: Ask;
+  closeInput?: () => void;
 };
 
-export const HELP = `Usage: adaegg init [<dir>] [--skip-check]
-                        Create your own hatchling repo in <dir> (default: hatchling):
-                        copy the template, install it and commit it. --skip-check
-                        skips running the new repo's own checks.
+export const HELP = `Usage: adaegg init [<dir>] [--name <name>] [--dir <dir>] [--no-start] [--skip-check]
+                        Create your own hatchling repo. In a terminal it asks for a name
+                        and a folder (--name and --dir, or <dir>, answer for you); the
+                        folder defaults to one named after the hatchling under the current
+                        directory. It copies the template, installs it, sets the name,
+                        commits it, runs the repo's own checks, then starts the hatchling
+                        and opens your browser. --no-start stops after installing;
+                        --skip-check skips the checks.
        adaegg --help    Show this help.
 `;
 
@@ -23,7 +32,13 @@ function parse(args: string[]) {
   try {
     return parseArgs({
       args,
-      options: { "skip-check": { type: "boolean" }, help: { type: "boolean", short: "h" } },
+      options: {
+        name: { type: "string" },
+        dir: { type: "string" },
+        "no-start": { type: "boolean" },
+        "skip-check": { type: "boolean" },
+        help: { type: "boolean", short: "h" },
+      },
       allowPositionals: true,
       strict: true,
     });
@@ -47,11 +62,26 @@ export async function runCli(argv: string[], io: CliIo, deps: { runInit?: typeof
       return 0;
     }
     if (positionals.length > 1) throw new UsageError(`unexpected argument: ${positionals[1]}`);
-    await (deps.runInit ?? runInit)(
-      { dir: positionals[0] ?? "hatchling", skipCheck: values["skip-check"] === true },
-      { cwd: io.cwd, env: io.env, stdout: io.stdout, stderr: io.stderr },
+    if (positionals.length > 0 && values.dir !== undefined) {
+      throw new UsageError("give the folder either as <dir> or as --dir, not both");
+    }
+    return await (deps.runInit ?? runInit)(
+      {
+        name: values.name,
+        dir: values.dir ?? positionals[0],
+        skipCheck: values["skip-check"] === true,
+        noStart: values["no-start"] === true,
+      },
+      {
+        cwd: io.cwd,
+        env: io.env,
+        stdout: io.stdout,
+        stderr: io.stderr,
+        isInteractive: io.isInteractive,
+        ask: io.ask,
+        closeInput: io.closeInput,
+      },
     );
-    return 0;
   } catch (err) {
     if (err instanceof UsageError) {
       io.stderr.write(`adaegg: ${err.message}\n${HELP}`);
@@ -69,12 +99,43 @@ export async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  process.exitCode = await runCli(process.argv.slice(2), {
-    stdout: process.stdout,
-    stderr: process.stderr,
-    cwd: process.cwd(),
-    env: process.env,
-  });
+  const prompt = readlinePrompt();
+  try {
+    process.exitCode = await runCli(process.argv.slice(2), {
+      stdout: process.stdout,
+      stderr: process.stderr,
+      cwd: process.cwd(),
+      env: process.env,
+      isInteractive: process.stdin.isTTY === true,
+      ask: prompt.ask,
+      closeInput: prompt.close,
+    });
+  } finally {
+    prompt.close();
+  }
+}
+
+// Opens the readline interface on the first question, so a run that never asks leaves stdin alone.
+function readlinePrompt(): { ask: Ask; close: () => void } {
+  let rl: Interface | undefined;
+  return {
+    ask: (question) => {
+      rl ??= createInterface({ input: process.stdin, output: process.stdout });
+      const active = rl;
+      return new Promise<string>((resolvePromise, reject) => {
+        const onClose = () => reject(new InitError("Input ended before the questions were answered."));
+        active.once("close", onClose);
+        active.question(question).then(
+          (answer) => {
+            active.off("close", onClose);
+            resolvePromise(answer);
+          },
+          (err: unknown) => reject(err),
+        );
+      });
+    },
+    close: () => rl?.close(),
+  };
 }
 
 const entry = process.argv[1];
