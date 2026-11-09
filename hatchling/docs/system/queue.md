@@ -27,6 +27,8 @@ Blockers are rows in `work_item_blocks(item_id, blocked_by_id)`.
 
 - A cron workflow's id: scheduled items. `fireDueSchedules` adds one, titled with the workflow's `name`, when its schedule is due and none of that kind is `queued` or `in_progress` (see the `cron` trigger in `workflows.md`).
 
+Items are created by the `hatch add` CLI, by the `enqueue` node (planned items), by cron schedules, and by the UI API: `POST /api/ask` adds a `request` (see [ui](ui.md)).
+
 The `parent_id` of planned items and of their verification is the root request.
 
 ## Statuses and transitions

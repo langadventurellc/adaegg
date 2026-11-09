@@ -13,6 +13,10 @@ A hatchling changes only through its queue: you describe work, the daemon does i
 
 Prefer an item when you can write the spec; a request spends an extra planning run and may produce a plan you did not intend. A request is verified at most `maxVerifyRounds` times (default 2, the `enqueue` node's config). A request whose plan has exactly one item gets no verification. See [workflows](../system/workflows.md) for the details.
 
+## Ask in the browser
+
+The browser is another way to ask. Open the URL from `hatch status` (the `ui` line). Anything asked there becomes a `request` that the daemon plans, like `hatch add --kind request`. See [ui](../system/ui.md).
+
 ## Write a good item
 
 Nobody can answer questions in the middle of a run: the implementer sees only the title and the contents. An item that leaves a decision open gets a guess. Give the contents these sections:

@@ -23,6 +23,7 @@ export const ReadySchema = z.object({
   pid: z.number().int(),
   startedAt: z.string(),
   head: z.string(),
+  url: z.string().optional(),
 });
 export type Ready = z.infer<typeof ReadySchema>;
 

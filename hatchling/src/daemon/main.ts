@@ -11,6 +11,7 @@ import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { dbPath, findRepoRoot, stateDir } from "../engine/paths.ts";
 import { loadWorkflows } from "../engine/workflows/load.ts";
 import type { Workflow } from "../engine/workflows/schema.ts";
+import { createUiServer } from "../server/server.ts";
 import { createDaemon, type Daemon } from "./daemon.ts";
 
 // Loads the workflows, or writes the loader's message to stderr and returns null so the daemon refuses to start.
@@ -34,6 +35,7 @@ export type StartDeps = {
   appConfig: Config;
   paths: { root: string; stateDir: string };
   tickMs?: number;
+  ui?: { start(): Promise<{ url: string }>; stop(): Promise<void> };
   exit: (code: number) => void;
 };
 
@@ -42,11 +44,19 @@ export type Started = { daemon: Daemon; shutdown: () => Promise<void> };
 // Starts the daemon, runs the first tick, then publishes ready.json. A clean stop (`shutdown`) or a restart
 // request removes ready.json, closes the db and calls `exit`.
 export async function startDaemon(deps: StartDeps): Promise<Started> {
-  const { db, paths, exit } = deps;
+  const { db, paths, exit, ui } = deps;
   let finished = false;
+  const stopUi = async () => {
+    try {
+      await ui?.stop();
+    } catch (err) {
+      process.stderr.write(`daemon: UI failed to stop: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  };
   const finish = async (code: number) => {
     finished = true;
     await daemon.stop();
+    await stopUi();
     db.close();
     deleteReady(paths.stateDir);
     exit(code);
@@ -66,10 +76,33 @@ export async function startDaemon(deps: StartDeps): Promise<Started> {
   await daemon.start();
   await daemon.tick();
   // A restart requested during startup has already removed ready.json; don't publish a daemon that is exiting.
+  let url: string | undefined;
+  if (!finished && ui) {
+    try {
+      url = (await ui.start()).url;
+      process.stdout.write(`hatchling UI: ${url}\n`);
+    } catch (err) {
+      // A broken UI must not stop the engine.
+      process.stderr.write(`daemon: UI failed to start: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    // A restart requested while the UI was starting could not stop it (it was not up yet); stop it now.
+    if (finished && url !== undefined) await stopUi();
+  }
   if (!finished) {
-    writeReady(paths.stateDir, { pid: process.pid, startedAt, head: git(paths.root, "rev-parse", "HEAD") });
+    writeReady(paths.stateDir, {
+      pid: process.pid,
+      startedAt,
+      head: git(paths.root, "rev-parse", "HEAD"),
+      ...(url === undefined ? {} : { url }),
+    });
   }
   return { daemon, shutdown: () => finish(0) };
+}
+
+// The real UI server, adapted to what `startDaemon` needs.
+function uiFor(db: DatabaseSync, root: string, port: number): NonNullable<StartDeps["ui"]> {
+  const server = createUiServer({ db, root, port });
+  return { start: async () => ({ url: (await server.start()).url }), stop: () => server.stop() };
 }
 
 export async function main(): Promise<void> {
@@ -87,6 +120,7 @@ export async function main(): Promise<void> {
     nodeTypes: builtinNodeTypes,
     appConfig,
     paths: { root, stateDir: stateDir(root, process.env) },
+    ...(appConfig.ui.enabled ? { ui: uiFor(db, root, appConfig.ui.port) } : {}),
     exit: (code) => process.exit(code),
   });
   process.on("SIGINT", () => void shutdown());

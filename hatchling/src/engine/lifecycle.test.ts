@@ -80,6 +80,14 @@ describe("files", () => {
     expect(() => readRestartRequest(stateDir)).toThrow(/restart\.json is not valid JSON/);
   });
 
+  it("round-trips ready with and without a url", () => {
+    const ready = { pid: 42, startedAt: new Date().toISOString(), head: "abc" };
+    writeReady(stateDir, { ...ready, url: "http://127.0.0.1:4747" });
+    expect(readReady(stateDir)).toEqual({ ...ready, url: "http://127.0.0.1:4747" });
+    writeReady(stateDir, ready);
+    expect(readReady(stateDir)?.url).toBeUndefined();
+  });
+
   it("round-trips ready and treats missing or invalid as null", () => {
     expect(readReady(stateDir)).toBeNull();
     const ready = { pid: 42, startedAt: new Date().toISOString(), head: "abc" };
