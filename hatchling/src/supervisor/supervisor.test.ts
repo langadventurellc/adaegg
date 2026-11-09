@@ -96,31 +96,49 @@ function runSupervisor(deps: SupervisorDeps): Promise<number> {
   return done;
 }
 
-function kill(pid: number): void {
+function kill(pid: number, sendSignal: typeof process.kill = process.kill): void {
   try {
-    process.kill(pid, "SIGKILL");
+    sendSignal(pid, "SIGKILL");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    // macOS answers EPERM for a group whose members have all exited but are not reaped yet.
+    if (code !== "ESRCH" && !(pid < 0 && code === "EPERM")) throw error;
   }
 }
 
-async function cleanupProcesses(): Promise<void> {
-  for (const supervisor of supervisors) supervisor.stop();
+async function cleanupProcesses(killProcess: (pid: number) => void = kill): Promise<void> {
+  const errors: unknown[] = [];
+  const attempt = (action: () => void) => {
+    try {
+      action();
+    } catch (error) {
+      errors.push(error);
+    }
+  };
+  for (const supervisor of supervisors) attempt(() => supervisor.stop());
   // Setup shells have their own process groups. Keep both shell and sleep pids so cleanup
   // still kills the sleep if its shell has already exited, including after a failed assertion.
   for (const file of sleeperPidFiles) {
     if (!existsSync(file)) continue;
     const [shell, sleeper] = readFileSync(file, "utf8").trim().split(/\s+/).map(Number);
-    if (shell && shell > 0) kill(-shell);
-    if (sleeper && sleeper > 0) kill(sleeper);
+    if (shell && shell > 0) attempt(() => killProcess(-shell));
+    if (sleeper && sleeper > 0) attempt(() => killProcess(sleeper));
   }
   for (const { child } of children) {
-    if (child.pid !== undefined) kill(-child.pid);
+    const pid = child.pid;
+    if (pid !== undefined) attempt(() => killProcess(-pid));
   }
-  await Promise.all([...supervisors.map(({ done }) => done), ...children.map(({ closed }) => closed)]);
+  const results = await Promise.allSettled([
+    ...supervisors.map(({ done }) => done),
+    ...children.map(({ closed }) => closed),
+  ]);
+  for (const result of results) {
+    if (result.status === "rejected") errors.push(result.reason);
+  }
   supervisors.length = 0;
   children.length = 0;
   sleeperPidFiles.length = 0;
+  if (errors.length > 0) throw errors[0];
 }
 
 afterEach(async () => {
@@ -132,6 +150,75 @@ afterEach(async () => {
 });
 
 const sleepReal = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+describe("process cleanup helpers", () => {
+  it.each([
+    [-123, "EPERM", false],
+    [123, "EPERM", true],
+    [-123, "ESRCH", false],
+    [123, "ESRCH", false],
+    [-123, "EINVAL", true],
+  ])("handles kill(%i) failing with %s", (pid, code, shouldThrow) => {
+    const error = Object.assign(new Error("signal failed"), { code });
+    const sendSignal: typeof process.kill = (target, signal) => {
+      expect(target).toBe(pid);
+      expect(signal).toBe("SIGKILL");
+      throw error;
+    };
+    const action = () => kill(pid, sendSignal);
+    if (shouldThrow) expect(action).toThrow(error);
+    else expect(action).not.toThrow();
+  });
+
+  it("attempts every kill and waits for supervisors and children before rethrowing the first error", async () => {
+    const firstError = new Error("first kill failed");
+    const pidFile = join(scriptDir, "cleanup-test.pid");
+    writeFileSync(pidFile, "123 456\n");
+    sleeperPidFiles.push(pidFile);
+    let finishSupervisor = () => {};
+    let closeChild = () => {};
+    let stopped = false;
+    supervisors.push(
+      { stop: () => {}, done: Promise.reject(new Error("supervisor failed")) },
+      {
+        stop: () => {
+          stopped = true;
+        },
+        done: new Promise<number>((resolve) => {
+          finishSupervisor = () => resolve(0);
+        }),
+      },
+    );
+    children.push({
+      child: { pid: 789 } as ChildProcess,
+      closed: new Promise<void>((resolve) => {
+        closeChild = resolve;
+      }),
+    });
+    const attempted: number[] = [];
+    let settled = false;
+    const cleanup = cleanupProcesses((pid) => {
+      attempted.push(pid);
+      throw pid === -123 ? firstError : new Error("later kill failed");
+    }).catch((error: unknown) => {
+      settled = true;
+      return error;
+    });
+    // Let even a premature rejection finish before checking that cleanup is still waiting.
+    await sleepReal(0);
+    expect(stopped).toBe(true);
+    expect(attempted).toEqual([-123, 456, -789]);
+    expect(settled).toBe(false);
+    finishSupervisor();
+    await sleepReal(0);
+    expect(settled).toBe(false);
+    closeChild();
+    expect(await cleanup).toBe(firstError);
+    expect(supervisors).toHaveLength(0);
+    expect(children).toHaveLength(0);
+    expect(sleeperPidFiles).toHaveLength(0);
+  });
+});
 
 async function waitFor(cond: () => boolean, what: string, ms = 8000): Promise<void> {
   const start = Date.now();
