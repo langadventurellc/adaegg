@@ -1,11 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import {
+  appendFileSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../engine/db.ts";
-import { type CliIo, runCli } from "./main.ts";
+import { type CliIo, defaultOpen, openWhenReady, runCli, type SpawnArgs } from "./main.ts";
 
 // Every call opens and migrates a fresh database; on a slow disk that alone nears the 5s default.
 vi.setConfig({ testTimeout: 30_000 });
@@ -35,7 +45,7 @@ type Result = { code: number; out: string; err: string };
 
 async function hatch(
   args: string[],
-  opts: { stdin?: string; tty?: boolean; cwd?: string; stop?: CliIo["stop"] } = {},
+  opts: { stdin?: string; tty?: boolean; cwd?: string; stop?: CliIo["stop"]; start?: CliIo["start"] } = {},
 ): Promise<Result> {
   let out = "";
   let err = "";
@@ -57,6 +67,7 @@ async function hatch(
     cwd: opts.cwd ?? repo,
     env: { ADAEGG_STATE_DIR: state },
     ...(opts.stop === undefined ? {} : { stop: opts.stop }),
+    ...(opts.start === undefined ? {} : { start: opts.start }),
   };
   const code = await runCli(args, io);
   return { code, out, err };
@@ -418,6 +429,217 @@ describe("stop", () => {
   it("is in the help and rejects an argument", async () => {
     expect((await hatch(["--help"])).out).toContain("  stop ");
     expectOneLineError(await hatch(["stop", "extra"]), /unexpected argument: extra/);
+  });
+});
+
+describe("name", () => {
+  it("stores a name and prints it", async () => {
+    expect(await hatch(["name", "Pip"])).toEqual({ code: 0, out: "Pip\n", err: "" });
+    expect((await hatch(["name"])).out).toBe("Pip\n");
+  });
+
+  it("stores the cleaned name", async () => {
+    expect((await hatch(["name", "  Pip   Moss "])).out).toBe("Pip Moss\n");
+    expect((await hatch(["name"])).out).toBe("Pip Moss\n");
+  });
+
+  it("fails on an invalid name and stores nothing", async () => {
+    const r = await hatch(["name", "3pip"]);
+    expect(r).toEqual({ code: 1, out: "", err: "hatch: Start the name with a letter.\n" });
+    expect((await hatch(["name"])).out).toBe("(none)\n");
+  });
+
+  it("rejects a second argument", async () => {
+    expectOneLineError(await hatch(["name", "Pip", "Moss"]), /unexpected argument: Moss/);
+  });
+});
+
+type Supervisor = Required<NonNullable<CliIo["start"]>>["supervisor"];
+
+describe("start --open and --detach", () => {
+  const url = "http://127.0.0.1:4321/";
+  const readyWithUrl = () => {
+    mkdirSync(state, { recursive: true });
+    writeFileSync(
+      join(state, "ready.json"),
+      JSON.stringify({ pid: process.pid, startedAt: "2026-01-01T00:00:00.000Z", head: "abc", url }),
+    );
+  };
+  const clock = () => {
+    let t = 0;
+    return () => (t += 1000);
+  };
+  const fast = { sleep: async () => {}, now: clock(), timeoutMs: 5000 };
+
+  it("spawns detached, waits for ready.json and prints the running line", async () => {
+    const spawn = vi.fn(() => readyWithUrl());
+    const r = await hatch(["start", "--detach"], { start: { ...fast, spawn } });
+    expect(r).toEqual({ code: 0, out: `hatchling is running at ${url}\n`, err: "" });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const call = (spawn.mock.calls[0] as unknown as [SpawnArgs])[0];
+    expect(call.command).toBe(process.execPath);
+    expect(call.args.at(-1)).toBe("start");
+    expect(call.args).not.toContain("--detach");
+    expect(call.args).not.toContain("--open");
+    expect(call.logFile).toBe(join(state, "logs", "supervisor.log"));
+    expect(call.env.ADAEGG_STATE_DIR).toBe(state);
+  });
+
+  it("uses the stored name in the running line", async () => {
+    await hatch(["name", "Pip"]);
+    const r = await hatch(["start", "--detach"], { start: { ...fast, spawn: () => readyWithUrl() } });
+    expect(r.out).toBe(`Pip is running at ${url}\n`);
+  });
+
+  it("times out with exit 1 and the log tail of this start", async () => {
+    mkdirSync(join(state, "logs"), { recursive: true });
+    writeFileSync(join(state, "logs", "supervisor.log"), "old line\n");
+    const spawn = vi.fn((a: SpawnArgs) => appendFileSync(a.logFile, "boom 1\nboom 2\n"));
+    const r = await hatch(["start", "--detach"], { start: { ...fast, spawn } });
+    expect(r.code).toBe(1);
+    expect(r.out).toBe("");
+    expect(r.err).toContain("did not become ready within 5s");
+    expect(r.err).toContain("boom 1\nboom 2\n");
+    expect(r.err).not.toContain("old line");
+  });
+
+  it("prints the running line without spawning when a supervisor is live", async () => {
+    writeSupervisor(process.pid);
+    readyWithUrl();
+    const spawn = vi.fn();
+    const open = vi.fn();
+    const r = await hatch(["start", "--detach"], { start: { ...fast, spawn, open } });
+    expect(r).toEqual({ code: 0, out: `hatchling is running at ${url}\n`, err: "" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("opens the url once with --detach --open", async () => {
+    writeSupervisor(process.pid);
+    readyWithUrl();
+    const open = vi.fn();
+    const r = await hatch(["start", "--detach", "--open"], { start: { ...fast, open } });
+    expect(r.code).toBe(0);
+    expect(open.mock.calls).toEqual([[url]]);
+  });
+
+  it("does not fail when the opener throws, and prints the url", async () => {
+    writeSupervisor(process.pid);
+    readyWithUrl();
+    const open = vi.fn(() => {
+      throw new Error("no opener");
+    });
+    const r = await hatch(["start", "--detach", "--open"], { start: { ...fast, open } });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(`open this address in your browser: ${url}\n`);
+  });
+
+  it("openWhenReady opens once the daemon is ready and stops when told to", async () => {
+    const open = vi.fn();
+    const io = {
+      stdout: { write: () => {} },
+      stderr: { write: () => {} },
+      stdin: Readable.from([]),
+      cwd: repo,
+      start: { ...fast, open },
+    };
+    let polls = 0;
+    io.start.sleep = async () => {
+      if (++polls === 2) readyWithUrl();
+    };
+    await openWhenReady(io, state, { stopped: false });
+    expect(open.mock.calls).toEqual([[url]]);
+    open.mockClear();
+    await openWhenReady(io, join(base, "nowhere"), { stopped: true });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  describe("foreground", () => {
+    // A supervisor that publishes readiness, waits for the opener to run, then ends.
+    const supervisorFor = (open: ReturnType<typeof vi.fn>, code = 0) =>
+      vi.fn(async () => {
+        readyWithUrl();
+        await vi.waitFor(() => expect(open).toHaveBeenCalled());
+        return code;
+      }) as unknown as Supervisor;
+
+    it("opens the url once while the supervisor runs", async () => {
+      const open = vi.fn();
+      const supervisor = supervisorFor(open);
+      const r = await hatch(["start", "--open"], { start: { ...fast, open, supervisor } });
+      expect(r).toEqual({ code: 0, out: "", err: "" });
+      expect(supervisor).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls).toEqual([[url]]);
+    });
+
+    it("keeps the supervisor running when the opener rejects", async () => {
+      const open = vi.fn(async () => {
+        throw new Error("no opener");
+      });
+      const supervisor = supervisorFor(open);
+      const r = await hatch(["start", "--open"], { start: { ...fast, open, supervisor } });
+      expect(r.code).toBe(0);
+      expect(r.out).toBe(`open this address in your browser: ${url}\n`);
+      expect(supervisor).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens nothing without --open", async () => {
+      const open = vi.fn();
+      const supervisor = vi.fn(async () => 0) as unknown as Supervisor;
+      const r = await hatch(["start"], { start: { ...fast, open, supervisor } });
+      expect(r.code).toBe(0);
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("default opener", () => {
+    const fakeChild = () => {
+      const child = new EventEmitter() as EventEmitter & { unref: () => void };
+      child.unref = () => {};
+      return child;
+    };
+    const launching = (child: EventEmitter) =>
+      vi.fn(() => child) as unknown as typeof import("node:child_process").spawn;
+
+    it("uses open on macOS and xdg-open elsewhere", async () => {
+      for (const [platform, command] of [
+        ["darwin", "open"],
+        ["linux", "xdg-open"],
+      ] as const) {
+        const child = fakeChild();
+        const launch = launching(child);
+        const done = defaultOpen(url, launch, platform);
+        child.emit("exit", 0);
+        await done;
+        expect(launch).toHaveBeenCalledWith(command, [url], { detached: true, stdio: "ignore" });
+      }
+    });
+
+    it("rejects when the opener is missing", async () => {
+      const child = fakeChild();
+      const done = defaultOpen(url, launching(child), "linux");
+      child.emit("error", new Error("spawn xdg-open ENOENT"));
+      await expect(done).rejects.toThrow("ENOENT");
+    });
+
+    it("rejects when the opener exits unsuccessfully", async () => {
+      const child = fakeChild();
+      const done = defaultOpen(url, launching(child), "linux");
+      child.emit("exit", 3);
+      await expect(done).rejects.toThrow("exited with 3");
+    });
+  });
+
+  it("is in the help", async () => {
+    const out = (await hatch(["--help"])).out;
+    expect(out).toContain("--detach");
+    expect(out).toContain("--open");
+    expect(out).toContain("  name ");
+  });
+
+  it("is what npm start runs", () => {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"));
+    expect(pkg.scripts.start).toBe("node src/cli/main.ts start --open");
   });
 });
 

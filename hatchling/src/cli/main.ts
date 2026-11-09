@@ -1,12 +1,14 @@
-import { readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { loadConfig } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
 import { isPidAlive, readReady, readSupervisor } from "../engine/lifecycle.ts";
 import { dbPath, findRepoRoot, stateDir } from "../engine/paths.ts";
 import { listNodeRuns, listRuns, listRunsForItem, type NodeRun, type Run } from "../engine/runs.ts";
+import { getSetting, setSetting } from "../engine/settings.ts";
 import {
   addWorkItem,
   cancelWorkItem,
@@ -17,6 +19,7 @@ import {
   type Status,
   type WorkItem,
 } from "../engine/store.ts";
+import { validateName } from "../names/validate.ts";
 import { deliveryOf, progressOf } from "../server/queue.ts";
 import { runSupervisor } from "../supervisor/supervisor.ts";
 
@@ -34,10 +37,32 @@ export type CliIo = {
     now?: () => number;
     timeoutMs?: number;
   };
+  // Lets tests start no process and open no browser.
+  start?: {
+    open?: (url: string) => void | Promise<void>;
+    spawn?: (args: SpawnArgs) => void;
+    supervisor?: typeof runSupervisor;
+    isPidAlive?: (pid: number) => boolean;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    timeoutMs?: number;
+    pollMs?: number;
+  };
+};
+
+export type SpawnArgs = {
+  command: string;
+  args: string[];
+  cwd: string;
+  logFile: string;
+  env: NodeJS.ProcessEnv;
 };
 
 const STOP_POLL_MS = 200;
 const STOP_TIMEOUT_MS = 60_000;
+const START_POLL_MS = 200;
+const START_TIMEOUT_MS = 60_000;
+const LOG_TAIL_LINES = 20;
 
 const STATUSES: Status[] = ["queued", "in_progress", "done", "failed", "cancelled"];
 
@@ -57,8 +82,13 @@ Commands:
   retry <id>            Queue a failed or cancelled item again.
   status                Count items per status, say whether the supervisor and the
                         daemon are up and show the UI url when it is.
-  start                 Run the daemon under a supervisor that restarts it after
-                        a change to the hatchling's own code.
+  name [<name>]         Show the hatchling's name, or set it.
+  start [--detach] [--open]
+                        Run the daemon under a supervisor that restarts it after
+                        a change to the hatchling's own code. --detach runs it in
+                        the background (log: <state>/logs/supervisor.log), waits
+                        until it is up, prints its url and returns; running it
+                        again while it is up is fine. --open opens the browser.
   stop                  Stop the hatchling: signals the supervisor (or the daemon
                         when it runs alone) and waits until both have exited.
                         Never reverts a merge.
@@ -106,6 +136,106 @@ function requireOne(positionals: string[], what: string): string {
   if (positionals.length === 0) throw new UsageError(`missing ${what}`);
   if (positionals.length > 1) throw new UsageError(`unexpected argument: ${positionals[1]}`);
   return positionals[0] as string;
+}
+
+type StartDeps = {
+  alive: (pid: number) => boolean;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+  timeoutMs: number;
+  pollMs: number;
+};
+
+function startDeps(io: CliIo): StartDeps {
+  const d = io.start ?? {};
+  return {
+    alive: d.isPidAlive ?? io.stop?.isPidAlive ?? isPidAlive,
+    sleep: d.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms))),
+    now: d.now ?? Date.now,
+    timeoutMs: d.timeoutMs ?? START_TIMEOUT_MS,
+    pollMs: d.pollMs ?? START_POLL_MS,
+  };
+}
+
+// Polls until the daemon is up and has a url; null on timeout or when `signal.stopped` is set.
+async function waitForUrl(dir: string, deps: StartDeps, signal: { stopped: boolean }): Promise<string | null> {
+  const deadline = deps.now() + deps.timeoutMs;
+  for (;;) {
+    if (signal.stopped) return null;
+    const ready = readReady(dir);
+    if (ready?.url !== undefined && deps.alive(ready.pid)) return ready.url;
+    if (deps.now() >= deadline) return null;
+    await deps.sleep(deps.pollMs);
+  }
+}
+
+const OPEN_WAIT_MS = 5_000;
+
+// Rejects when the opener is missing, can't start or exits unsuccessfully, so openUrl prints the address.
+export function defaultOpen(
+  url: string,
+  launch: typeof spawn = spawn,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  return new Promise((done, fail) => {
+    const command = platform === "darwin" ? "open" : "xdg-open";
+    const child = launch(command, [url], { detached: true, stdio: "ignore" });
+    // An opener that stays up (a browser started in the foreground) has opened the page.
+    const timer = setTimeout(() => {
+      child.unref();
+      done();
+    }, OPEN_WAIT_MS);
+    timer.unref();
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      fail(err);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) done();
+      else fail(new Error(`${command} exited with ${code}`));
+    });
+  });
+}
+
+// A failure to open never stops the hatchling: the address is printed instead.
+async function openUrl(io: CliIo, url: string): Promise<void> {
+  try {
+    await (io.start?.open ?? defaultOpen)(url);
+  } catch {
+    io.stdout.write(`open this address in your browser: ${url}\n`);
+  }
+}
+
+// Opens the browser once the daemon is ready; resolves when it has, or on timeout or `signal.stopped`.
+export async function openWhenReady(io: CliIo, dir: string, signal: { stopped: boolean }): Promise<void> {
+  const url = await waitForUrl(dir, startDeps(io), signal);
+  if (url !== null) await openUrl(io, url);
+}
+
+function defaultSpawn({ command, args, cwd, logFile, env }: SpawnArgs): void {
+  const logFd = openSync(logFile, "a");
+  try {
+    const child = spawn(command, args, { cwd, detached: true, stdio: ["ignore", logFd, logFd], env });
+    child.on("error", () => {});
+    child.unref();
+  } finally {
+    closeSync(logFd);
+  }
+}
+
+function logTail(logFile: string, from: number): string {
+  try {
+    const text = readFileSync(logFile, "utf8");
+    const own = Buffer.from(text).subarray(from).toString("utf8");
+    return own
+      .split("\n")
+      .filter((l) => l !== "")
+      .slice(-LOG_TAIL_LINES)
+      .join("\n");
+  } catch {
+    return "";
+  }
 }
 
 function describeBlocked(item: ListedWorkItem): string {
@@ -299,22 +429,91 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       return;
     }
     case "start": {
-      const { values, positionals } = parse(args, {});
+      const { values, positionals } = parse(args, { open: { type: "boolean" }, detach: { type: "boolean" } });
       if (values.help) return void out(HELP);
       if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals[0]}`);
       const root = findRepoRoot(io.cwd);
-      const recorded = readSupervisor(stateDir(root, env));
-      if (recorded !== null && (io.stop?.isPidAlive ?? isPidAlive)(recorded.pid)) {
+      const dir = stateDir(root, env);
+      const deps = startDeps(io);
+      const recorded = readSupervisor(dir);
+      const running = recorded !== null && deps.alive(recorded.pid);
+      if (values.detach) {
+        const logFile = join(dir, "logs", "supervisor.log");
+        let logStart = 0;
+        if (!running) {
+          mkdirSync(join(dir, "logs"), { recursive: true });
+          try {
+            logStart = statSync(logFile).size;
+          } catch {
+            // No log yet.
+          }
+          (io.start?.spawn ?? defaultSpawn)({
+            command: process.execPath,
+            args: [fileURLToPath(import.meta.url), "start"],
+            cwd: root,
+            logFile,
+            env,
+          });
+        }
+        const url = await waitForUrl(dir, deps, { stopped: false });
+        if (url === null) {
+          io.stderr.write(
+            `hatch: hatchling did not become ready within ${Math.round(deps.timeoutMs / 1000)}s; last log lines:\n`,
+          );
+          const tail = logTail(logFile, logStart);
+          if (tail !== "") io.stderr.write(`${tail}\n`);
+          throw new ExitCode(1);
+        }
+        const db = openDb(dbPath(root, env));
+        let name: string;
+        try {
+          name = getSetting(db, "name") ?? "hatchling";
+        } finally {
+          db.close();
+        }
+        out(`${name} is running at ${url}\n`);
+        if (values.open) await openUrl(io, url);
+        return;
+      }
+      if (running) {
         throw new Error(`a hatchling is already running here (pid ${recorded.pid}); stop it with hatch stop`);
       }
-      const code = await runSupervisor({
-        root,
-        stateDir: stateDir(root, env),
-        config: loadConfig(root),
-        stdout: io.stdout,
-        stderr: io.stderr,
-      });
+      const signal = { stopped: false };
+      const opened = values.open ? openWhenReady(io, dir, signal) : Promise.resolve();
+      let code: number;
+      try {
+        code = await (io.start?.supervisor ?? runSupervisor)({
+          root,
+          stateDir: dir,
+          config: loadConfig(root),
+          stdout: io.stdout,
+          stderr: io.stderr,
+        });
+      } finally {
+        signal.stopped = true;
+        await opened;
+      }
       if (code !== 0) throw new ExitCode(code);
+      return;
+    }
+    case "name": {
+      const { values, positionals } = parse(args, {});
+      if (values.help) return void out(HELP);
+      if (positionals.length > 1) throw new UsageError(`unexpected argument: ${positionals[1]}`);
+      const wanted = positionals[0];
+      const checked = wanted === undefined ? null : validateName(wanted);
+      if (checked !== null && !checked.ok) throw new Error(checked.error);
+      const db = openDb(dbPath(findRepoRoot(io.cwd), env));
+      try {
+        if (checked?.ok) {
+          setSetting(db, "name", checked.name);
+          out(`${checked.name}\n`);
+        } else {
+          out(`${getSetting(db, "name") ?? "(none)"}\n`);
+        }
+      } finally {
+        db.close();
+      }
       return;
     }
     case "status": {
@@ -407,7 +606,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   }
 }
 
-export const COMMANDS = ["add", "list", "show", "runs", "cancel", "retry", "status", "start", "stop"];
+export const COMMANDS = ["add", "list", "show", "runs", "cancel", "retry", "status", "name", "start", "stop"];
 
 function isCommand(name: string): boolean {
   return COMMANDS.includes(name);

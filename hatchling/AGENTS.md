@@ -32,6 +32,13 @@ A page that keeps data uses `pageData(<page id>)` from `src/ui/client.ts` (`list
 
 ## The `hatch` CLI
 
+### Starting and stopping this hatchling
+
+- To start it, run `bin/hatch start --detach`. It returns once the hatchling is up and prints `<name> is running at <url>`. Running it again when it is already up is fine.
+- `bin/hatch status` shows whether it runs and its URL.
+- `bin/hatch stop` stops it.
+- Never run `npm start` or `bin/hatch start` without `--detach` from an agent: they don't return.
+
 ```
 hatch add "<title>" [--file <path>] [--kind item|request] [--blocked-by <id>]... [--parent <id>] [--priority <n>]
 hatch list [--status <s>] [--json]
@@ -40,7 +47,8 @@ hatch runs [--limit n]     # newest runs first (default 20)
 hatch cancel <id>      # queued items only
 hatch retry <id>       # failed or cancelled items only
 hatch status           # count per status, then `supervisor  up (pid n)` when a supervisor is running, `daemon  up (pid n)` or `daemon  down`, then `ui  <url>` when the UI is up
-hatch start            # run the daemon under the supervisor (also `npm start`)
+hatch name [<name>]    # show the name the UI uses, or set it
+hatch start [--detach] [--open]   # run the daemon under the supervisor; --detach runs it in the background (log: .adaegg/logs/supervisor.log) and returns once it is up; --open opens the browser; `npm start` is `hatch start --open`
 hatch stop             # stop the supervisor and its daemon (waits until both have exited); never reverts a merge
 ```
 
