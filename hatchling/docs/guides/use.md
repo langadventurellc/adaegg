@@ -90,6 +90,10 @@ Statuses:
 
 Kinds: `item` (built by `implement`), `request` (planned into items), `verify` (checks a request was delivered), and the id of a cron workflow, such as `tidy`, for scheduled items. See [queue](../system/queue.md).
 
+In `hatch list` and `hatch show`, a request shows its delivery state after its status (for example `done  building 0/1`), so `done` alone does not mean its items are built.
+
+To stop a hatchling from another terminal, run `hatch stop`: it ends the daemon and the supervisor, waits until the daemon has exited, then prints `stopped`; interrupted runs resume on the next start.
+
 In Ask, a request is "Delivered" only when every step and the verification are done. "Needs attention" means a step failed: press Retry on the step it names. "Incomplete" means the verification gave up with work still missing: use "Ask for the rest" (it fills the textarea for you to edit and send), or look with `hatch show <id>`.
 
 ## Cancel and retry

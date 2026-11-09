@@ -33,7 +33,10 @@ afterEach(() => {
 
 type Result = { code: number; out: string; err: string };
 
-async function hatch(args: string[], opts: { stdin?: string; tty?: boolean; cwd?: string } = {}): Promise<Result> {
+async function hatch(
+  args: string[],
+  opts: { stdin?: string; tty?: boolean; cwd?: string; stop?: CliIo["stop"] } = {},
+): Promise<Result> {
   let out = "";
   let err = "";
   const stdin = Object.assign(Readable.from(opts.stdin === undefined ? [] : [opts.stdin]), {
@@ -53,6 +56,7 @@ async function hatch(args: string[], opts: { stdin?: string; tty?: boolean; cwd?
     stdin,
     cwd: opts.cwd ?? repo,
     env: { ADAEGG_STATE_DIR: state },
+    ...(opts.stop === undefined ? {} : { stop: opts.stop }),
   };
   const code = await runCli(args, io);
   return { code, out, err };
@@ -236,6 +240,132 @@ describe("list, show, cancel, retry, status", () => {
 
   it("rejects an argument to start", async () => {
     expectOneLineError(await hatch(["start", "now"]), /unexpected argument: now/);
+  });
+});
+
+function writeReady(pid: number) {
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(state, "ready.json"), JSON.stringify({ pid, startedAt: "2026-01-01T00:00:00.000Z", head: "abc" }));
+}
+
+describe("stop", () => {
+  it("says the daemon is down without ready.json and signals nothing", async () => {
+    const kill = vi.fn();
+    const r = await hatch(["stop"], { stop: { kill } });
+    expect(r).toEqual({ code: 0, out: "daemon  down\n", err: "" });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("says the daemon is down when ready.json names a dead pid", async () => {
+    writeReady(4242);
+    const kill = vi.fn();
+    const r = await hatch(["stop"], { stop: { kill, isPidAlive: () => false } });
+    expect(r).toEqual({ code: 0, out: "daemon  down\n", err: "" });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("sends SIGTERM once, waits until the pid is gone, then prints stopped", async () => {
+    writeReady(4242);
+    const kill = vi.fn();
+    let polls = 0;
+    const sleep = vi.fn(async () => {});
+    const r = await hatch(["stop"], {
+      stop: { kill, sleep, isPidAlive: () => polls++ < 4 },
+    });
+    expect(r).toEqual({ code: 0, out: "stopped\n", err: "" });
+    expect(kill.mock.calls).toEqual([[4242, "SIGTERM"]]);
+    expect(sleep).toHaveBeenCalledWith(200);
+  });
+
+  it("times out with a message naming the pid and never sends SIGKILL", async () => {
+    writeReady(4242);
+    const kill = vi.fn();
+    let clock = 0;
+    const r = await hatch(["stop"], {
+      stop: {
+        kill,
+        isPidAlive: () => true,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        now: () => clock,
+      },
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toBe("");
+    expect(r.err).toMatch(/^hatch: [^\n]+\n$/);
+    expect(r.err).toContain("4242");
+    expect(r.err).toContain("did not stop");
+    expect(r.err).toContain("kill");
+    expect(kill.mock.calls).toEqual([[4242, "SIGTERM"]]);
+    expect(clock).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("treats ESRCH from the signal as stopped", async () => {
+    writeReady(4242);
+    const kill = () => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    };
+    const r = await hatch(["stop"], { stop: { kill, isPidAlive: () => true } });
+    expect(r).toEqual({ code: 0, out: "stopped\n", err: "" });
+  });
+
+  it("is in the help and rejects an argument", async () => {
+    expect((await hatch(["--help"])).out).toContain("  stop ");
+    expectOneLineError(await hatch(["stop", "extra"]), /unexpected argument: extra/);
+  });
+});
+
+describe("delivery in list and show", () => {
+  function setRow(idShort: string, set: string, ...params: (string | null)[]) {
+    const db = openDb(join(state, "hatch.db"));
+    db.prepare(`UPDATE work_items SET ${set} WHERE id LIKE ?`).run(...params, `${idShort}%`);
+    db.close();
+  }
+  function fullId(idShort: string): string {
+    const db = openDb(join(state, "hatch.db"));
+    const id = (db.prepare("SELECT id FROM work_items WHERE id LIKE ?").get(`${idShort}%`) as { id: string }).id;
+    db.close();
+    return id;
+  }
+  async function seedRequest(childStatus: string) {
+    const req = await add(["Req", "--kind", "request"]);
+    const child = await add(["Step"]);
+    setRow(req, "status = 'done'");
+    setRow(child, "parent_id = ?, status = ?", fullId(req), childStatus);
+    return { req, child };
+  }
+
+  it("shows a request with an unfinished child as building", async () => {
+    const { req, child } = await seedRequest("in_progress");
+    const r = await hatch(["list"]);
+    expect(r.out).toContain(`${req}  done  building 0/1  p0  Req\n`);
+    expect(r.out).toContain(`${child}  in_progress  p0  Step\n`);
+  });
+
+  it("shows a request whose children are all done as delivered", async () => {
+    const { req } = await seedRequest("done");
+    expect((await hatch(["list"])).out).toContain(`${req}  done  delivered 1/1  p0  Req\n`);
+  });
+
+  it("keeps the building state under --status done", async () => {
+    const { req } = await seedRequest("in_progress");
+    expect((await hatch(["list", "--status", "done"])).out).toBe(`${req}  done  building 0/1  p0  Req\n`);
+  });
+
+  it("leaves list --json without a delivery field", async () => {
+    await seedRequest("in_progress");
+    const json = JSON.parse((await hatch(["list", "--json"])).out) as Record<string, unknown>[];
+    expect(json).toHaveLength(2);
+    for (const row of json) expect(Object.keys(row)).not.toContain("delivery");
+    expect(JSON.stringify(json)).not.toContain("building");
+  });
+
+  it("prints a delivery line for a request in show, not for an item", async () => {
+    const { req, child } = await seedRequest("in_progress");
+    expect((await hatch(["show", req])).out).toContain("status: done\ndelivery: building 0/1\n");
+    expect((await hatch(["show", child])).out).not.toContain("delivery:");
+    expect(JSON.parse((await hatch(["show", req, "--json"])).out)).not.toHaveProperty("delivery");
   });
 });
 

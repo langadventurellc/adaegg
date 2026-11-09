@@ -34,6 +34,7 @@ hatch cancel <id>      # queued items only
 hatch retry <id>       # failed or cancelled items only
 hatch status           # count per status, then `daemon  up (pid n)` or `daemon  down`, then `ui  <url>` when the UI is up
 hatch start            # run the daemon under the supervisor (also `npm start`)
+hatch stop             # stop the daemon and its supervisor (waits until it has exited)
 ```
 
 `add` reads the contents from `--file`, else from stdin when it is piped. Ids may be a prefix of at least 4 characters. `hatch add` is how you chain requests: queue follow-up work with `hatch add "title" --blocked-by <id>` and it waits until that item is done. An `item` (the default) is a ready-made spec that is implemented as written. A `request` is a larger or vaguer ask that the daemon plans into a chain of items (and a verification) before anything is built.
