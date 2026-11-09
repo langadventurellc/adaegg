@@ -17,6 +17,12 @@ Prefer an item when you can write the spec; a request spends an extra planning r
 
 The browser is another way to ask. Open the URL from `hatch status` (the `ui` line). Anything asked there becomes a `request` that the daemon plans, like `hatch add --kind request`. See [ui](../system/ui.md).
 
+The first visit goes like this:
+
+1. Run `hatch status` and open the URL on its `ui` line.
+2. Name the hatchling: accept the suggested name or ask for another, then choose it.
+3. Ask: type what you want, or pick a starter, and press Ask. The request appears in "Your requests" with its status.
+
 ## Write a good item
 
 Nobody can answer questions in the middle of a run: the implementer sees only the title and the contents. An item that leaves a decision open gets a guess. Give the contents these sections:

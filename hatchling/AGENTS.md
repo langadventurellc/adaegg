@@ -11,7 +11,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `workflows/`: workflow YAML files, loaded at daemon start.
 - `prompts/`: the role prompts the agent nodes send.
 - `src/server/`: the local UI server: guard, API, queue summary and Vite middleware.
-- `src/ui/`: the browser UI (a placeholder for now), served by `src/server/`.
+- `src/ui/`: the browser UI (onboarding and Ask screens, plain TypeScript), served by `src/server/`.
 - `src/names/`: the names list, the suggestion picker and name validation for onboarding.
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
 - `docs/`: guides and system docs (see Docs below).

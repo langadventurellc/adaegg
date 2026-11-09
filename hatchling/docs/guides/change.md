@@ -31,6 +31,10 @@ Rules that tests enforce:
 
 A schedule is the workflow's trigger: `trigger: { type: cron, schedule: "..." }`. See [workflows](../system/workflows.md) for the syntax.
 
+## Change the UI
+
+The browser UI lives in `src/ui/`: the markup in `view.ts`, the look in `style.css`, the starter requests in `starters.ts`, the screen transitions in `state.ts` and the DOM wiring in `main.ts` (see [ui](../system/ui.md)). Put logic in the pure modules and test it there. A UI change is under `src/`, so queue it as an item, and the daemon restarts after its merge.
+
 ## Which merges restart the daemon
 
 A merge that touches `src/`, `workflows/`, `prompts/`, `bin/`, `package.json`, `package-lock.json` or `adaegg.json` makes the daemon exit 75; the supervisor (`hatch start`) restarts it. If the new daemon is not healthy within the probation window, the supervisor rolls back with `git revert` and marks the item `failed`. A docs-only merge restarts nothing. Details: [restart and rollback](../system/restart-and-rollback.md).
