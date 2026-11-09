@@ -14,6 +14,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `src/ui/`: the browser UI (onboarding and Ask screens, plain TypeScript), served by `src/server/`.
 - `src/names/`: the names list, the suggestion picker and name validation for onboarding.
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
+- `README.md`: for people using this repo.
 - `docs/`: guides and system docs (see Docs below).
 - `adaegg.json`: marks the repo root.
 - `.adaegg/`: state (the SQLite database). Git-ignored; never commit it.
