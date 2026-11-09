@@ -20,13 +20,15 @@ Every self-change stays covered. While `restart.json` exists the daemon claims n
 
 ## Readiness
 
-Once the workflows are loaded, the database is open and the first tick is done, the daemon writes `<state>/ready.json` (`{ pid, startedAt, head }`). It deletes it on a clean exit, and the supervisor deletes it before every start. `hatch status` prints `daemon  up` when `ready.json` exists and its pid is alive.
+Once the workflows are loaded, the database is open and the first tick is done, the daemon writes `<state>/ready.json` (`{ pid, startedAt, head }`). It deletes it on a clean exit, and the supervisor deletes it before every start. `hatch status` prints `daemon  up` when `ready.json` exists and its pid is alive. It also prints `supervisor  up` when `supervisor.json` names a live pid.
 
 ## The supervisor loop
 
 Each start: delete `ready.json`; if `restart.json` exists and `package.json` or `package-lock.json` changed between `preMergeHead` and `mergeCommit`, run the `setup` command from `adaegg.json` in the main checkout; spawn `node src/daemon/main.ts` in the repo root, appending its output to `<state>/logs/daemon.log`. Exit 0 ends the supervisor with 0. Exit 75 starts again at once. Any other exit restarts after 2s.
 
 SIGINT/SIGTERM to the supervisor send SIGTERM to the daemon, wait for it (then kill it) and exit.
+
+The supervisor records its pid in `<state>/supervisor.json` while it runs and deletes it on every exit; `hatch stop` signals the supervisor and not the daemon, so a stop never reverts a merge (a daemon that exits on probation without a stop still fails probation).
 
 ## Probation
 
@@ -56,6 +58,7 @@ Read, in this order:
 1. `<state>/logs/daemon.log`: the daemon's output, newest last.
 2. `<state>/restart.json`: present while a self-change merge is on probation.
 3. `<state>/ready.json`: present while a daemon is up.
-4. `git log --first-parent <base>`: the merge and, after a rollback, its `Revert` commit.
+4. `<state>/supervisor.json`: present while a supervisor runs.
+5. `git log --first-parent <base>`: the merge and, after a rollback, its `Revert` commit.
 
 `<state>` is `.adaegg/` unless `ADAEGG_STATE_DIR` is set.

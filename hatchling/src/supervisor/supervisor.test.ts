@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../engine/db.ts";
-import { isPidAlive, type RestartRequest, restartPath, writeRestartRequest } from "../engine/lifecycle.ts";
+import {
+  isPidAlive,
+  type RestartRequest,
+  readSupervisor,
+  restartPath,
+  supervisorPath,
+  writeRestartRequest,
+  writeSupervisor,
+} from "../engine/lifecycle.ts";
 import { buildTemplateRepo, copyRepo, removeAllRepos, removeCopies, sh } from "../engine/nodes/test-repo.ts";
 import { addWorkItem, claimNext, finishWorkItem, getWorkItem } from "../engine/store.ts";
 import { type ChildHandle, runSupervisor as runSupervisorImpl, type SupervisorDeps } from "./supervisor.ts";
@@ -503,6 +511,49 @@ describe("runSupervisor", () => {
     expect(await done).toBe(0);
     expect(h.spawned).toHaveLength(1);
     expect(readFileSync(join(stateDir, "logs", "daemon.log"), "utf8")).toContain("got SIGTERM");
+  });
+
+  it("records its pid in supervisor.json while it runs and removes it after a clean stop", async () => {
+    const h = harness(["healthy"]);
+    const done = runSupervisor(h.deps);
+    await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
+    expect(readSupervisor(stateDir)).toEqual({ pid: process.pid });
+    h.signal();
+    expect(await done).toBe(0);
+    expect(existsSync(supervisorPath(stateDir))).toBe(false);
+  });
+
+  it("removes supervisor.json when it returns 1 after a daemon fails probation", async () => {
+    writeRequest();
+    const h = harness(["exit:1"], { onProbationFailed: async () => "exit" });
+    expect(await runSupervisor(h.deps)).toBe(1);
+    expect(existsSync(supervisorPath(stateDir))).toBe(false);
+  });
+
+  it("does not remove a supervisor.json that names another process", async () => {
+    const h = harness(["healthy"]);
+    const done = runSupervisor(h.deps);
+    await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
+    writeSupervisor(stateDir, { pid: process.pid + 1 });
+    h.signal();
+    expect(await done).toBe(0);
+    expect(readSupervisor(stateDir)).toEqual({ pid: process.pid + 1 });
+  });
+
+  it("a stop while a restart is on probation returns 0, reverts nothing and leaves the item done", async () => {
+    writeRestartRequest(stateDir, makeMerge("fine"));
+    const head = sh(repo, "rev-parse", "HEAD");
+    const h = harness(["healthy"], { timing: { stableMs: 60_000 } });
+    const done = runSupervisor(h.deps);
+    await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
+    expect(existsSync(restartPath(stateDir))).toBe(true);
+    h.signal();
+    expect(await done).toBe(0);
+    expect(commits("--grep=^Revert").filter((c) => c !== "")).toEqual([]);
+    expect(sh(repo, "rev-parse", "HEAD")).toBe(head);
+    expect(itemStatus().status).toBe("done");
+    expect(h.stderr()).not.toContain("rolling it back");
+    expect(existsSync(supervisorPath(stateDir))).toBe(false);
   });
 });
 

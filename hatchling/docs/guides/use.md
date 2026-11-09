@@ -70,7 +70,7 @@ A blocker that fails or is cancelled does not fail its dependants: they stay `qu
 ## Read status
 
 ```
-hatch status               # count per status, and whether the daemon is up
+hatch status               # count per status, and whether the supervisor and the daemon are up
 hatch list                 # all items; add --status <s> or --json
 hatch show <id>            # one item, its blockers, its runs and node runs
 hatch runs --limit 5       # newest runs first (default 20)
@@ -92,7 +92,7 @@ Kinds: `item` (built by `implement`), `request` (planned into items), `verify` (
 
 In `hatch list` and `hatch show`, a request shows its delivery state after its status (for example `done  building 0/1`), so `done` alone does not mean its items are built.
 
-To stop a hatchling from another terminal, run `hatch stop`: it ends the daemon and the supervisor, waits until the daemon has exited, then prints `stopped`; interrupted runs resume on the next start.
+To stop a hatchling from another terminal, run `hatch stop`: it signals the supervisor, waits until the supervisor and the daemon have exited, then prints `stopped`, and never reverts a merge, even during probation; interrupted runs resume on the next start.
 
 In Ask, a request is "Delivered" only when every step and the verification are done. "Needs attention" means a step failed: press Retry on the step it names. "Incomplete" means the verification gave up with work still missing: use "Ask for the rest" (it fills the textarea for you to edit and send), or look with `hatch show <id>`.
 

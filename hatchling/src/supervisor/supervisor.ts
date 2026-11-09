@@ -8,10 +8,13 @@ import {
   deleteReady,
   deleteRestartRequest,
   deleteRestartRequestIfUnchanged,
+  deleteSupervisor,
   RESTART_EXIT_CODE,
   type RestartRequest,
   readReady,
   readRestartRequest,
+  readSupervisor,
+  writeSupervisor,
 } from "../engine/lifecycle.ts";
 import { currentBranch, git, isClean } from "../engine/nodes/git.ts";
 import { dbPath } from "../engine/paths.ts";
@@ -322,6 +325,7 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
   const crashes: number[] = [];
 
   try {
+    writeSupervisor(stateDir, { pid: process.pid });
     while (!stopping) {
       deleteReady(stateDir);
       const request = readRestartRequest(stateDir);
@@ -407,5 +411,7 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<number> {
     return 0;
   } finally {
     unsubscribe();
+    // Never remove a record another process wrote.
+    if (readSupervisor(stateDir)?.pid === process.pid) deleteSupervisor(stateDir);
   }
 }
