@@ -18,6 +18,27 @@ export function screenFor(state: { name: string | null } | null, editingName: bo
   return "ask";
 }
 
+export type Route = { kind: "ask" } | { kind: "page"; id: string } | { kind: "not-found"; id: string };
+
+// `#` or `#/` is the Ask screen, `#/<id>` a known page. Anything else is not-found; its id is the raw
+// remainder, for display only (always escaped). Never throws.
+export function routeFor(hash: string, pages: readonly { id: string }[]): Route {
+  const path = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (path === "" || path === "/") return { kind: "ask" };
+  if (!path.startsWith("/")) return { kind: "not-found", id: path };
+  let raw = path.slice(1);
+  if (raw.endsWith("/")) raw = raw.slice(0, -1);
+  if (raw === "") return { kind: "ask" };
+  if (raw.includes("/")) return { kind: "not-found", id: raw };
+  let id: string;
+  try {
+    id = decodeURIComponent(raw);
+  } catch {
+    return { kind: "not-found", id: raw };
+  }
+  return pages.some((page) => page.id === id) ? { kind: "page", id } : { kind: "not-found", id: raw };
+}
+
 export function describeStatus(row: Pick<RequestRow, "status" | "blockedBy">): string {
   switch (row.status) {
     case "queued":
@@ -151,7 +172,24 @@ export function renderOnboarding(input: {
   ].join("");
 }
 
-export function renderAsk(input: { name: string; starters: readonly string[]; requests?: RequestRow[] }): string {
+export function renderAsk(input: {
+  name: string;
+  starters: readonly string[];
+  requests?: RequestRow[];
+  pages?: readonly { id: string; title: string }[];
+}): string {
+  const pages = input.pages ?? [];
+  const yourPages =
+    pages.length === 0
+      ? ""
+      : [
+          '<section class="your-pages">',
+          "<h2>Your pages</h2>",
+          '<ul class="pages">',
+          ...pages.map((page) => `<li><a href="#/${escapeHtml(page.id)}">${escapeHtml(page.title)}</a></li>`),
+          "</ul>",
+          "</section>",
+        ].join("");
   const starters = input.starters
     .map(
       (text) =>
@@ -169,12 +207,25 @@ export function renderAsk(input: { name: string; starters: readonly string[]; re
     "<h2>Not sure where to start?</h2>",
     starters,
     "</section>",
+    yourPages,
     '<section class="your-requests">',
     "<h2>Your requests</h2>",
     `<div id="requests">${renderRequests(input.requests ?? [])}</div>`,
     "</section>",
     '<button type="button" class="small" data-action="rename">Change name</button>',
   ].join("");
+}
+
+export function renderPageHeader(name: string): string {
+  return `<header class="page-header"><a href="#/">Ask ${escapeHtml(name)}</a></header>`;
+}
+
+export function renderNotFound(name: string): string {
+  return `${renderPageHeader(name)}<p>This page doesn&#39;t exist.</p>`;
+}
+
+export function renderPageError(message: string): string {
+  return `<p class="error" role="alert">${escapeHtml(message)}</p>`;
 }
 
 export function renderBanner(kind: "restarting" | "error", message: string): string {

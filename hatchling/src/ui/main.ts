@@ -1,6 +1,7 @@
 import "./style.css";
 import { validateName } from "../names/validate.ts";
 import { ApiError, createClient, UnreachableError } from "./client.ts";
+import { PAGES, type Page } from "./pages/index.ts";
 import { pickStarters } from "./starters.ts";
 import {
   actionFinished,
@@ -15,7 +16,18 @@ import {
   setValue,
   startRename,
 } from "./state.ts";
-import { RESTARTING_MESSAGE, renderAsk, renderBanner, renderOnboarding, renderRequests, screenFor } from "./view.ts";
+import {
+  RESTARTING_MESSAGE,
+  renderAsk,
+  renderBanner,
+  renderNotFound,
+  renderOnboarding,
+  renderPageError,
+  renderPageHeader,
+  renderRequests,
+  routeFor,
+  screenFor,
+} from "./view.ts";
 
 // A thin shell: every decision and every piece of markup comes from the tested pure modules
 // (state.ts, view.ts, starters.ts, client.ts). Nothing here is covered by tests (no DOM environment).
@@ -28,6 +40,7 @@ const starters = pickStarters(Math.random);
 let session: Session = initialSession();
 let shownScreen: string | null = null;
 let shownSuggestion = false;
+let pageCleanup: (() => void) | null = null;
 let polling = false; // only polls are single-flight; a refresh after an action always runs
 
 function currentScreen(): "onboarding" | "ask" {
@@ -51,27 +64,69 @@ function renderRequestsSlot(): void {
   if (slot) slot.innerHTML = renderRequests(session.rows);
 }
 
+// Onboarding wins over the hash; the route only matters on the ask screen.
+function currentView(): string {
+  if (currentScreen() === "onboarding") return "onboarding";
+  const route = routeFor(location.hash, PAGES);
+  return route.kind === "ask" ? "ask" : `${route.kind}:${route.id}`;
+}
+
+function leavePage(): void {
+  const cleanup = pageCleanup;
+  pageCleanup = null;
+  try {
+    cleanup?.();
+  } catch {
+    // A page's cleanup failing must not break the shell.
+  }
+}
+
 function fullRender(): void {
   if (!app) return;
+  leavePage();
   const s = session.screen;
-  const screen = currentScreen();
-  const body =
-    screen === "ask"
-      ? renderAsk({ name: s.state?.name ?? "", starters, requests: session.rows })
-      : renderOnboarding({ suggestion: s.suggestion, value: s.value, error: s.error, current: s.current });
+  const name = s.state?.name ?? "";
+  const view = currentView();
+  const route = routeFor(location.hash, PAGES);
+  let title = "Ada Egg";
+  let body: string;
+  let page: Page | undefined;
+  if (view === "onboarding") {
+    body = renderOnboarding({ suggestion: s.suggestion, value: s.value, error: s.error, current: s.current });
+  } else if (route.kind === "page") {
+    page = PAGES.find((p) => p.id === route.id);
+    title = page?.title ?? `Ask ${name}`;
+    body = `${renderPageHeader(name)}<div id="page-root"></div>`;
+  } else if (route.kind === "not-found") {
+    title = `Ask ${name}`;
+    body = renderNotFound(name);
+  } else {
+    title = `Ask ${name}`;
+    body = renderAsk({ name, starters, requests: session.rows, pages: PAGES });
+  }
   app.innerHTML = `<div id="banner">${bannerHtml()}</div><main>${body}</main>`;
-  document.title = screen === "ask" ? `Ask ${s.state?.name ?? ""}` : "Ada Egg";
-  shownScreen = screen;
+  document.title = title;
+  shownScreen = view;
   shownSuggestion = s.suggestion !== null;
+  const root = document.querySelector<HTMLElement>("#page-root");
+  if (page && root) {
+    try {
+      const cleanup = page.render(root);
+      if (typeof cleanup === "function") pageCleanup = cleanup;
+    } catch (err) {
+      root.innerHTML = renderPageError(describe(err));
+    }
+  }
 }
 
 function render(): void {
   // A suggestion that arrives late (first load failed) redraws onboarding once; after that the form is the user's.
   const lateSuggestion = shownScreen === "onboarding" && !shownSuggestion && session.screen.suggestion !== null;
-  if (currentScreen() !== shownScreen || lateSuggestion) fullRender();
+  if (currentView() !== shownScreen || lateSuggestion) fullRender();
   else {
     renderBannerSlot();
-    renderRequestsSlot();
+    // Only the Ask screen has the requests list; a page's own DOM is never touched by a poll.
+    if (shownScreen === "ask") renderRequestsSlot();
   }
 }
 
@@ -231,6 +286,11 @@ app?.addEventListener("submit", (event) => {
 setInterval(() => {
   if (!document.hidden) void refresh(false, true);
 }, POLL_MS);
+
+window.addEventListener("hashchange", () => {
+  // Before the first state arrives there is nothing to draw; the first render picks up the hash.
+  if (shownScreen !== null) fullRender();
+});
 
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void refresh(false, true);
