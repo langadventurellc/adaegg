@@ -43,7 +43,8 @@ Commands:
   runs [--limit n]      List the newest runs (default 20).
   cancel <id>           Cancel a queued item.
   retry <id>            Queue a failed or cancelled item again.
-  status                Count items per status and say whether the daemon is up.
+  status                Count items per status, say whether the daemon is up and
+                        show the UI url when it is.
   start                 Run the daemon under a supervisor that restarts it after
                         a change to the hatchling's own code.
 
@@ -287,7 +288,12 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
         const items = listWorkItems(db);
         out(STATUSES.map((s) => `${s}  ${items.filter((i) => i.status === s).length}\n`).join(""));
         const ready = readReady(stateDir(root, env));
-        out(ready !== null && isPidAlive(ready.pid) ? `daemon  up (pid ${ready.pid})\n` : "daemon  down\n");
+        if (ready !== null && isPidAlive(ready.pid)) {
+          out(`daemon  up (pid ${ready.pid})\n`);
+          if (ready.url !== undefined) out(`ui  ${ready.url}\n`);
+        } else {
+          out("daemon  down\n");
+        }
       } finally {
         db.close();
       }

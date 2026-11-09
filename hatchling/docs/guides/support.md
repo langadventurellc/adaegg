@@ -27,6 +27,15 @@ Start from the symptom. `<state>` is `.adaegg/`, or `$ADAEGG_STATE_DIR` when tha
 
 If the daemon prints workflow problems and exits 1, a file in `workflows/` is invalid: the output names the file and each problem (see [workflows](../system/workflows.md), Load-time checks). How restarts and rollbacks work is in [restart and rollback](../system/restart-and-rollback.md).
 
+## The UI does not load
+
+1. Get the URL from `hatch status` (the `ui` line). If the default port was in use, the server fell back to a free one, so check the URL rather than assuming 4747.
+2. Look in the daemon's stderr (`.adaegg/logs/daemon.log`) for `UI failed to start`; the daemon keeps running without a UI then.
+3. Check that `ui.enabled` is not `false` in `adaegg.json`.
+4. After a self-change merge the daemon restarts and the page is briefly down; reload in a few seconds.
+
+See [ui](../system/ui.md).
+
 ## A schedule did not fire
 
 1. Schedules use the machine's local time, not UTC.
