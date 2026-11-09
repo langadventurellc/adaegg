@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn } from "node:child_process";
+import { type ChildProcess, spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import { openDb } from "../engine/db.ts";
 import { isPidAlive, type RestartRequest, restartPath, writeRestartRequest } from "../engine/lifecycle.ts";
 import { buildTemplateRepo, copyRepo, removeAllRepos, removeCopies, sh } from "../engine/nodes/test-repo.ts";
 import { addWorkItem, claimNext, finishWorkItem, getWorkItem } from "../engine/store.ts";
-import { type ChildHandle, runSupervisor, type SupervisorDeps } from "./supervisor.ts";
+import { type ChildHandle, runSupervisor as runSupervisorImpl, type SupervisorDeps } from "./supervisor.ts";
 
 // The fake daemon: `node daemon.mjs <stateDir> <behavior>`. Behaviors: `healthy` (publishes ready.json, stays up),
 // `never-ready` (stays up silently) and `exit:<code>`. On SIGTERM it prints a line and exits 0.
@@ -73,8 +73,62 @@ beforeEach(() => {
   db.close();
 });
 
-afterEach(() => {
-  removeCopies();
+const supervisors: { stop: () => void; done: Promise<number> }[] = [];
+const children: { child: ChildProcess; closed: Promise<void> }[] = [];
+const sleeperPidFiles: string[] = [];
+
+function trackChild<T extends ChildProcess>(child: T): T {
+  const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  children.push({ child, closed });
+  return child;
+}
+
+function runSupervisor(deps: SupervisorDeps): Promise<number> {
+  let stop = () => {};
+  const done = runSupervisorImpl({
+    ...deps,
+    signals: (handler) => {
+      stop = handler;
+      return deps.signals?.(handler) ?? (() => {});
+    },
+  });
+  supervisors.push({ stop: () => stop(), done });
+  return done;
+}
+
+function kill(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+async function cleanupProcesses(): Promise<void> {
+  for (const supervisor of supervisors) supervisor.stop();
+  // Setup shells have their own process groups. Keep both shell and sleep pids so cleanup
+  // still kills the sleep if its shell has already exited, including after a failed assertion.
+  for (const file of sleeperPidFiles) {
+    if (!existsSync(file)) continue;
+    const [shell, sleeper] = readFileSync(file, "utf8").trim().split(/\s+/).map(Number);
+    if (shell && shell > 0) kill(-shell);
+    if (sleeper && sleeper > 0) kill(sleeper);
+  }
+  for (const { child } of children) {
+    if (child.pid !== undefined) kill(-child.pid);
+  }
+  await Promise.all([...supervisors.map(({ done }) => done), ...children.map(({ closed }) => closed)]);
+  supervisors.length = 0;
+  children.length = 0;
+  sleeperPidFiles.length = 0;
+}
+
+afterEach(async () => {
+  try {
+    await cleanupProcesses();
+  } finally {
+    removeCopies();
+  }
 });
 
 const sleepReal = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -195,7 +249,9 @@ function harness(behaviors: string[], over: Partial<SupervisorDeps> = {}): Harne
         if (mergeRequest) writeRestartRequest(stateDir, mergeRequest);
         else writeRequest();
       }
-      const child = nodeSpawn("node", [script, stateDir, behavior], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      const child = trackChild(
+        nodeSpawn("node", [script, stateDir, behavior], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] }),
+      );
       child.stdout.on("data", (d) => onOutput(String(d)));
       child.stderr.on("data", (d) => onOutput(String(d)));
       const handle: ChildHandle = {
@@ -577,22 +633,58 @@ describe("rollback", () => {
   // A killed process nobody has reaped yet is a zombie: it is gone for our purposes.
   const running = (pid: number): boolean => {
     if (!isPidAlive(pid)) return false;
-    try {
-      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
-    } catch {
-      return false;
-    }
+    // BSD/macOS and Linux both support these ps flags and the stat field.
+    const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+    if (result.error) throw result.error;
+    const state = result.stdout.trim();
+    return state !== "" && !state.startsWith("Z");
   };
+
+  it("recognizes a live process and a child that has been killed and reaped", async () => {
+    expect(running(process.pid)).toBe(true);
+    const child = trackChild(
+      nodeSpawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }),
+    );
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const pid = child.pid as number;
+    expect(running(pid)).toBe(true);
+    child.kill("SIGKILL");
+    await closed;
+    expect(running(pid)).toBe(false);
+  });
 
   // With `passFirst`, the first run only leaves a marker and succeeds; later runs hang.
   const sleeperSetup = (passFirst = false) => {
     const pidFile = join(scriptDir, `sleeper-${Date.now()}.pid`);
     const marker = `${pidFile}.first`;
-    const readPid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : 0);
-    const hang = `sleep 300 & echo $! > ${pidFile}; wait`;
-    const command = passFirst ? `if [ -e ${marker} ]; then ${hang}; else touch ${marker}; fi` : hang;
+    sleeperPidFiles.push(pidFile);
+    const readPid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim().split(/\s+/)[1]) : 0);
+    const quote = (path: string) => `'${path.replaceAll("'", "'\\''")}'`;
+    const hang = `sleep 30 & echo "$$ $!" > ${quote(pidFile)}; wait`;
+    const command = passFirst ? `if [ -e ${quote(marker)} ]; then ${hang}; else touch ${quote(marker)}; fi` : hang;
     return { command, readPid };
   };
+
+  it("cleans up a setup and daemon left running when a test ends early", async () => {
+    const daemon = harness(["healthy"]);
+    const daemonDone = runSupervisor(daemon.deps);
+    await waitFor(() => existsSync(join(stateDir, "ready.json")), "the daemon to start");
+    writeRequest(true);
+    const sleeper = sleeperSetup();
+    const setup = harness([], { config: { setup: sleeper.command, baseBranch: "main" } });
+    const setupDone = runSupervisor(setup.deps);
+    await waitFor(() => sleeper.readPid() > 0, "the setup's child to start");
+    const pid = sleeper.readPid();
+    const shellPid = Number(readFileSync(sleeperPidFiles[0] as string, "utf8").split(/\s+/)[0]);
+    expect(running(pid)).toBe(true);
+    expect(running(shellPid)).toBe(true);
+    // No test-side signal: the same cleanup used by afterEach must stop everything.
+    await cleanupProcesses();
+    await Promise.all([daemonDone, setupDone]);
+    expect(running(pid)).toBe(false);
+    expect(running(shellPid)).toBe(false);
+    expect(running((daemon.spawned[0] as ChildHandle).pid)).toBe(false);
+  });
 
   it("stops while a real setup runs before the start: ends the setup's whole process tree first", async () => {
     const request = writeRequest(true);
@@ -721,7 +813,9 @@ process.exitCode = await runSupervisor({
 
   it("exits promptly after SIGTERM once the daemon has stopped, without waiting out the grace period", async () => {
     const runner = writeRunner();
-    const supervisor = nodeSpawn("node", [runner, repo, stateDir, script], { stdio: "ignore" });
+    const supervisor = trackChild(
+      nodeSpawn("node", [runner, repo, stateDir, script], { stdio: "ignore", detached: true }),
+    );
     const exited = new Promise<number | null>((resolve) => supervisor.on("exit", resolve));
     await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
     const sentAt = Date.now();
@@ -733,7 +827,9 @@ process.exitCode = await runSupervisor({
   it("does not wait out the setup kill grace after a completed setup when told to stop", async () => {
     const runner = writeRunner();
     writeRestartRequest(stateDir, makeRequest(true));
-    const supervisor = nodeSpawn("node", [runner, repo, stateDir, script, "true"], { stdio: "ignore" });
+    const supervisor = trackChild(
+      nodeSpawn("node", [runner, repo, stateDir, script, "true"], { stdio: "ignore", detached: true }),
+    );
     const exited = new Promise<number | null>((resolve) => supervisor.on("exit", resolve));
     await waitFor(() => existsSync(join(stateDir, "ready.json")), "ready.json");
     const sentAt = Date.now();
