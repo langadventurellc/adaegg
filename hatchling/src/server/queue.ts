@@ -81,6 +81,11 @@ export function deliveryOf(parent: ListedWorkItem, children: ListedWorkItem[]): 
   return { state: "delivered", attention: null };
 }
 
+export function progressOf(children: ListedWorkItem[]): { done: number; total: number } | null {
+  const steps = children.filter((c) => c.kind === "item");
+  return steps.length === 0 ? null : { done: steps.filter((c) => c.status === "done").length, total: steps.length };
+}
+
 export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
   const counts: Record<Status, number> = { queued: 0, in_progress: 0, done: 0, failed: 0, cancelled: 0 };
   const children = new Map<string, ListedWorkItem[]>();
@@ -100,7 +105,6 @@ export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
   );
   for (const { item } of ordered) {
     if (item.parentId !== null || (item.kind !== "request" && item.kind !== "item")) continue;
-    const steps = (children.get(item.id) ?? []).filter((c) => c.kind === "item");
     requests.push({
       id: item.id,
       title: item.title,
@@ -108,8 +112,7 @@ export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
       status: item.status,
       error: item.error,
       createdAt: item.createdAt,
-      progress:
-        steps.length === 0 ? null : { done: steps.filter((c) => c.status === "done").length, total: steps.length },
+      progress: progressOf(children.get(item.id) ?? []),
       blockedBy: item.blockedBy,
       delivery: item.kind === "request" ? deliveryOf(item, children.get(item.id) ?? []) : null,
     });

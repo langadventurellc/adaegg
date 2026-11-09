@@ -17,6 +17,7 @@ import {
   type Status,
   type WorkItem,
 } from "../engine/store.ts";
+import { deliveryOf, progressOf } from "../server/queue.ts";
 import { runSupervisor } from "../supervisor/supervisor.ts";
 
 export type CliIo = {
@@ -25,7 +26,18 @@ export type CliIo = {
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  // Lets tests stop a fake daemon instead of signalling a real one.
+  stop?: {
+    kill?: (pid: number, signal: NodeJS.Signals) => void;
+    isPidAlive?: (pid: number) => boolean;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+    timeoutMs?: number;
+  };
 };
+
+const STOP_POLL_MS = 200;
+const STOP_TIMEOUT_MS = 60_000;
 
 const STATUSES: Status[] = ["queued", "in_progress", "done", "failed", "cancelled"];
 
@@ -47,6 +59,8 @@ Commands:
                         show the UI url when it is.
   start                 Run the daemon under a supervisor that restarts it after
                         a change to the hatchling's own code.
+  stop                  Stop the daemon (and with it the supervisor) and wait
+                        until it has exited.
 
 Ids may be abbreviated to a prefix of at least 4 characters.
 Options: -h, --help
@@ -98,8 +112,23 @@ function describeBlocked(item: ListedWorkItem): string {
   return `  (blocked by ${item.blockedBy.map(short).join(", ")})`;
 }
 
-function formatItem(item: ListedWorkItem): string {
-  return `${short(item.id)}  ${item.status}  p${item.priority}  ${item.title}${describeBlocked(item)}\n`;
+function childrenByParent(items: ListedWorkItem[]): Map<string, ListedWorkItem[]> {
+  const map = new Map<string, ListedWorkItem[]>();
+  for (const item of items) {
+    if (item.parentId === null) continue;
+    map.set(item.parentId, [...(map.get(item.parentId) ?? []), item]);
+  }
+  return map;
+}
+
+function describeDelivery(item: ListedWorkItem, children: ListedWorkItem[]): string {
+  const progress = progressOf(children);
+  return `${deliveryOf(item, children).state}${progress === null ? "" : ` ${progress.done}/${progress.total}`}`;
+}
+
+function formatItem(item: ListedWorkItem, children: ListedWorkItem[]): string {
+  const delivery = item.kind === "request" ? `  ${describeDelivery(item, children)}` : "";
+  return `${short(item.id)}  ${item.status}${delivery}  p${item.priority}  ${item.title}${describeBlocked(item)}\n`;
 }
 
 function formatNodeRun(n: NodeRun): string {
@@ -107,11 +136,12 @@ function formatNodeRun(n: NodeRun): string {
   return `    ${n.nodeId}  attempt ${n.attempt}  ${n.outcome ?? "-"}  problem: ${n.problem ?? "-"}  cost: ${cost}`;
 }
 
-function formatShow(item: ListedWorkItem, runs: (Run & { nodeRuns: NodeRun[] })[]): string {
+function formatShow(item: ListedWorkItem, runs: (Run & { nodeRuns: NodeRun[] })[], children: ListedWorkItem[]): string {
   const lines = [
     `id: ${item.id}`,
     `title: ${item.title}`,
     `status: ${item.status}`,
+    ...(item.kind === "request" ? [`delivery: ${describeDelivery(item, children)}`] : []),
     `kind: ${item.kind}`,
     `priority: ${item.priority}`,
     `parent: ${item.parentId ?? "-"}`,
@@ -205,7 +235,10 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       const db = openDb(dbPath(findRepoRoot(io.cwd), env));
       try {
         const items = listWorkItems(db, values.status === undefined ? {} : { status: values.status as Status });
-        out(values.json ? `${JSON.stringify(items, null, 2)}\n` : items.map(formatItem).join(""));
+        if (values.json) return void out(`${JSON.stringify(items, null, 2)}\n`);
+        // Delivery depends on every child, not only those the --status filter keeps.
+        const children = childrenByParent(listWorkItems(db));
+        out(items.map((item) => formatItem(item, children.get(item.id) ?? [])).join(""));
       } finally {
         db.close();
       }
@@ -219,7 +252,8 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       try {
         const item = withAllBlockers(db, getWorkItem(db, ref));
         const runs = listRunsForItem(db, item.id).map((run) => ({ ...run, nodeRuns: listNodeRuns(db, run.id) }));
-        out(values.json ? `${JSON.stringify({ ...item, runs }, null, 2)}\n` : formatShow(item, runs));
+        const children = listWorkItems(db).filter((c) => c.parentId === item.id);
+        out(values.json ? `${JSON.stringify({ ...item, runs }, null, 2)}\n` : formatShow(item, runs, children));
       } finally {
         db.close();
       }
@@ -299,6 +333,38 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       }
       return;
     }
+    case "stop": {
+      const { values, positionals } = parse(args, {});
+      if (values.help) return void out(HELP);
+      if (positionals.length > 0) throw new UsageError(`unexpected argument: ${positionals[0]}`);
+      const deps = io.stop ?? {};
+      const kill = deps.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
+      const alive = deps.isPidAlive ?? isPidAlive;
+      const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+      const now = deps.now ?? Date.now;
+      const timeoutMs = deps.timeoutMs ?? STOP_TIMEOUT_MS;
+      // ready.json holds the daemon's pid; its SIGTERM handler shuts down cleanly and the supervisor ends with it.
+      const ready = readReady(stateDir(findRepoRoot(io.cwd), env));
+      if (ready === null || !alive(ready.pid)) return void out("daemon  down\n");
+      const pid = ready.pid;
+      try {
+        kill(pid, "SIGTERM");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
+        return void out("stopped\n");
+      }
+      const deadline = now() + timeoutMs;
+      while (alive(pid)) {
+        if (now() >= deadline) {
+          throw new Error(
+            `daemon (pid ${pid}) did not stop within ${Math.round(timeoutMs / 1000)}s; if it is stuck, kill it by hand with: kill ${pid}`,
+          );
+        }
+        await sleep(STOP_POLL_MS);
+      }
+      out("stopped\n");
+      return;
+    }
     default:
       throw new UsageError(`unknown command: ${command}`);
   }
@@ -326,7 +392,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   }
 }
 
-export const COMMANDS = ["add", "list", "show", "runs", "cancel", "retry", "status", "start"];
+export const COMMANDS = ["add", "list", "show", "runs", "cancel", "retry", "status", "start", "stop"];
 
 function isCommand(name: string): boolean {
   return COMMANDS.includes(name);

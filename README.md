@@ -83,6 +83,7 @@ npm run hatch -- show <id>
 npm run hatch -- status
 npm run hatch -- retry <id>
 npm start
+npm run hatch -- stop
 ```
 
 The hatchling's [AGENTS.md](hatchling/AGENTS.md) is written for LLM agents, such as an outside coding agent you point at your repo. Its guides and system docs are in [hatchling/docs/](hatchling/docs/system/queue.md).
