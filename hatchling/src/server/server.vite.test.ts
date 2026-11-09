@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -46,6 +48,63 @@ it("sends no CORS headers, even for another localhost origin", async () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   }
+});
+
+type UpgradeResult = { status: number; socket: Socket | null };
+
+// Sends a WebSocket upgrade with the given Host and protocol; resolves with the status line's code.
+function upgrade(port: number, host: string, protocol: string): Promise<UpgradeResult> {
+  return new Promise((resolve) => {
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: "/",
+      headers: {
+        Host: host,
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Protocol": protocol,
+      },
+    });
+    req.on("upgrade", (res, socket) => resolve({ status: res.statusCode ?? 0, socket }));
+    req.on("response", (res) => resolve({ status: res.statusCode ?? 0, socket: null }));
+    req.on("error", () => resolve({ status: 0, socket: null }));
+    req.end();
+  });
+}
+
+function connectRefused(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    socket.on("connect", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on("error", () => resolve(true));
+  });
+}
+
+it("keeps live reload on the loopback server and opens no second listener", async () => {
+  server = createUiServer({ db: openDb(":memory:"), root: dir, port: 0, vite: true });
+  const { port } = await server.start();
+  expect(await connectRefused(24678)).toBe(true);
+
+  for (const protocol of ["vite-hmr", "vite-ping"]) {
+    for (const host of [`evil.example:${port}`, "localhost:1", "127.0.0.1"]) {
+      const bad = await upgrade(port, host, protocol);
+      expect(bad.status).not.toBe(101);
+      bad.socket?.destroy();
+    }
+  }
+
+  const ok = await upgrade(port, `127.0.0.1:${port}`, "vite-hmr");
+  expect(ok.status).toBe(101);
+  const closed = new Promise<void>((resolve) => ok.socket?.on("close", () => resolve()));
+  await server.stop();
+  await closed;
+  expect(await connectRefused(port)).toBe(true);
 });
 
 it("answers 500 internal error when a module fails to transform", async () => {

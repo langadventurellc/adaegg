@@ -129,6 +129,18 @@ export function createUiServer(opts: UiServerOptions): UiServer {
     });
   });
 
+  // Registered before Vite attaches its own upgrade listener, so it runs first. Vite's listener only
+  // acts on the vite-hmr and vite-ping protocols and its Host check is skipped for vite-ping and does
+  // not check the port, so a refused upgrade is closed here and its protocol header is blanked so
+  // Vite's listener ignores the socket.
+  server.on("upgrade", (req, socket) => {
+    const refused = checkRequest({ method: "GET", headers: req.headers, port: boundPort });
+    if (!refused) return;
+    req.headers["sec-websocket-protocol"] = "";
+    socket.end(`HTTP/1.1 ${refused.status} Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    socket.destroy();
+  });
+
   function listen(port: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const onError = (err: NodeJS.ErrnoException) => {
@@ -167,7 +179,9 @@ export function createUiServer(opts: UiServerOptions): UiServer {
         vite = await createVite({
           root: opts.root,
           // cors: false because Vite allows loopback origins by default and this server sends no CORS headers.
-          server: { middlewareMode: { server }, watch: { ignored: ["**/.adaegg/**"] }, cors: false },
+          // ws.server keeps live reload on this loopback server; without it Vite opens a second listener
+          // on port 24678 on every interface.
+          server: { middlewareMode: { server }, ws: { server }, watch: { ignored: ["**/.adaegg/**"] }, cors: false },
           optimizeDeps: { entries: ["index.html"] },
           clearScreen: false,
           logLevel: "warn",
