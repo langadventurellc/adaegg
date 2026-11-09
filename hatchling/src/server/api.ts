@@ -2,10 +2,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { getSetting, setSetting } from "../engine/settings.ts";
 import { addWorkItem, cancelWorkItem, getWorkItem, listWorkItems, retryWorkItem } from "../engine/store.ts";
 import { validateName } from "../names/validate.ts";
-import { summarizeQueue, titleFromText } from "./queue.ts";
+import { type QueueSummary, summarizeQueue, titleFromText } from "./queue.ts";
 
 export type ApiRequest = { method: string; path: string; body: unknown };
 export type ApiResponse = { status: number; body: unknown };
+// The body of GET /api/state; only here so the browser client can import the type.
+export type StateResponse = { name: string | null; queue: QueueSummary };
 
 const MAX_ASK_LENGTH = 10_000;
 

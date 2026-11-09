@@ -49,6 +49,35 @@ Every request, API or Vite, passes `checkRequest` in `src/server/guard.ts` first
 
 There is no login. Anyone who can open 127.0.0.1 on this machine can queue work, and agents run with the user's permissions.
 
+## Screens
+
+The page is plain TypeScript with no framework, in `src/ui/`:
+
+- Onboarding: shown while no name is stored, and again from "Change name" (the heading then reads "Rename <name>" and the input is prefilled with the current name). It suggests a name from the names list (see [names](names.md)), with "Another suggestion" for more. The name is validated in the browser with `validateName`, and a server 400 shows the server's message inline.
+- Ask: `Ask <name>` with a textarea, three starter requests (buttons that fill the textarea and never submit) and the "Your requests" list. Asking posts to `/api/ask`. Failed rows have Retry and queued rows have Cancel.
+- While the server is unreachable (for example during the restart after a self-change) a "restarting" banner shows above the current screen and polling continues. The page never reloads itself; Vite's client does that when the daemon comes back.
+
+The browser tab title is `Ask <name>` on the ask screen and `Ada Egg` (the product name) during onboarding.
+
+## Files
+
+| File | Role |
+| --- | --- |
+| `src/ui/main.ts` | The thin DOM shell: loads state, renders, delegates `data-action` clicks and form submits on `#app`, polls. |
+| `src/ui/view.ts` | Pure rendering to HTML strings (`renderOnboarding`, `renderAsk`, `renderRequests`, `renderBanner`) and `screenFor`. |
+| `src/ui/state.ts` | Pure screen-state transitions, with the random source injected. |
+| `src/ui/client.ts` | The typed API client (`ApiError`, `UnreachableError`). |
+| `src/ui/starters.ts` | `STARTER_REQUESTS` and `pickStarters`. |
+| `src/ui/style.css` | All styling. |
+
+To change the starter requests, edit `STARTER_REQUESTS` in `src/ui/starters.ts` (keep 10 to 12 single-line entries of at most 120 characters). To change the look, edit `src/ui/style.css`; it uses CSS system colours so it follows the user's light or dark theme.
+
+Polling runs every 3 seconds while the page is visible, and once when it becomes visible again. A poll replaces only the inner HTML of `#requests`, never the whole page, so text being typed and focus are kept. Polling never does a full render except when the screen changes or a late first suggestion arrives. A fetch that started before a finished action (Ask, Retry, Cancel, naming) is dropped as stale, and each action refreshes at once afterwards, so a slow poll can neither hide nor undo it (`Session` and `applyFetchResult` in `state.ts`).
+
+Every user-visible string, whether from the user or the server (names, request titles, errors), goes through `escapeHtml` in `view.ts` before it is put in markup.
+
+The pure modules (`view.ts`, `state.ts`, `client.ts`, `starters.ts`) are tested. The click and typing handlers in `main.ts` are not: the project has no DOM test environment, so keep `main.ts` a thin shell and put logic in the pure modules.
+
 ## State and restarts
 
 The name lives in the `settings` table (`src/engine/settings.ts`), not in `adaegg.json`: changing a tracked file dirties the checkout the merge node needs clean.
