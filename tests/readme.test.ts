@@ -84,23 +84,25 @@ describe("README.md", () => {
     expect(missing).toEqual([]);
   });
 
-  it("says how to install and what it needs", () => {
-    for (const text of ["npx adaegg init", "ANTHROPIC_API_KEY", "Node 24", "127.0.0.1"]) {
+  it("says what it needs", () => {
+    for (const text of ["ANTHROPIC_API_KEY", "Node 24", "127.0.0.1"]) {
       expect(readme).toContain(text);
     }
   });
 
-  it("gives an install route that works from a clone, before the npx route", () => {
+  it("gives the one-line install, before the development section, and no npx route", () => {
+    const line = "curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/install.sh | bash";
     for (const text of [
-      "git clone https://github.com/langadventurellc/adaegg",
-      "pnpm install",
-      "pnpm build",
-      "node bin/adaegg.mjs init",
+      line,
+      "bash -s --",
+      "node installer/main.ts init ../my-hatchling",
+      "ADAEGG_SOURCE=. sh install.sh ../my-hatchling",
     ]) {
       expect(readme).toContain(text);
     }
-    expect(existsSync(join(repoRoot, "bin/adaegg.mjs"))).toBe(true);
-    expect(readme.indexOf("node bin/adaegg.mjs init")).toBeLessThan(readme.indexOf("npx adaegg init"));
+    expect(readme).not.toContain("npx adaegg");
+    expect(existsSync(join(repoRoot, "install.sh"))).toBe(true);
+    expect(readme.indexOf(line)).toBeLessThan(readme.indexOf("Developing Ada Egg itself"));
   });
 
   it("does not present Ada Egg as another company's product", () => {
