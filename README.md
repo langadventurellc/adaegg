@@ -93,7 +93,9 @@ npm run hatch -- list
 npm run hatch -- show <id>
 npm run hatch -- status
 npm run hatch -- retry <id>
+npm run hatch -- name <name>
 npm start
+npm run hatch -- start --detach
 npm run hatch -- stop
 ```
 

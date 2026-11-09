@@ -8,7 +8,9 @@ This repo is a hatchling: software that rewrites itself from your requests. It w
 npm start
 ```
 
-Look for the line `hatchling UI: <url>` in the output (or run `npm run hatch -- status`), open that address, name your hatchling and ask for what you want. Agents use your Claude login (run `claude` once) or `ANTHROPIC_API_KEY`.
+This starts your hatchling and opens your browser; Ctrl-C stops it. To run it in the background instead, use `npm run hatch -- start --detach`, and `npm run hatch -- stop` to stop it. A coding agent pointed at this folder can start it too ("start my hatchling"), because `AGENTS.md` tells it how.
+
+If the browser doesn't open, look for the line `hatchling UI: <url>` in the output (or run `npm run hatch -- status`) and open that address. Name your hatchling and ask for what you want. Agents use your Claude login (run `claude` once) or `ANTHROPIC_API_KEY`.
 
 ## For agents
 
