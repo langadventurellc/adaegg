@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { NameEntry } from "../names/names.ts";
 import { pickSuggestions } from "../names/suggest.ts";
-import type { RequestRow } from "../server/queue.ts";
+import type { Delivery, RequestRow } from "../server/queue.ts";
 import {
+  describeDelivery,
   describeStatus,
   escapeHtml,
   progressLabel,
@@ -83,6 +84,91 @@ describe("renderRequests", () => {
     expect(html).toContain("No requests yet. Ask for something above.");
     expect(html).toContain('aria-live="polite"');
     expect(renderRequests([row()])).toContain('aria-live="polite"');
+  });
+});
+
+describe("delivery rows", () => {
+  const rid = "abcd1234-0000-4000-8000-000000000000";
+  const stepId = "step0000-0000-4000-8000-000000000000";
+  const d = (state: Delivery["state"], attention: Delivery["attention"] = null): Delivery => ({ state, attention });
+
+  it("labels each state", () => {
+    const labels: [Delivery["state"], string][] = [
+      ["planning", "Waiting"],
+      ["building", "Building"],
+      ["verifying", "Checking the result"],
+      ["delivered", "Delivered"],
+      ["needs-attention", "Needs attention"],
+      ["incomplete", "Incomplete"],
+      ["failed", "Failed"],
+      ["cancelled", "Cancelled"],
+    ];
+    for (const [state, label] of labels) {
+      expect(describeDelivery(d(state), row())).toBe(label);
+      const html = renderRequests([row({ status: state === "planning" ? "queued" : "done", delivery: d(state) })]);
+      expect(html).toContain(`data-status="${state}"`);
+      expect(html).toContain(`>${label}</span>`);
+    }
+    expect(describeDelivery(d("planning"), row({ status: "in_progress" }))).toBe("Working");
+    expect(describeDelivery(d("planning"), row({ blockedBy: ["x"] }))).toBe("Waiting for other work");
+  });
+
+  it("names the failing step and retries that step, not the request", () => {
+    const attention = { id: stepId, title: "Build it", error: "boom", action: "retry" as const };
+    const html = renderRequests([row({ status: "done", delivery: d("needs-attention", attention) })]);
+    expect(html).toContain("Build it failed: boom");
+    expect(html).toContain(`data-action="retry" data-id="${stepId}"`);
+    expect(html).not.toContain(`${rid}"`);
+    const cancelled = renderRequests([
+      row({ status: "done", delivery: d("needs-attention", { ...attention, error: null }) }),
+    ]);
+    expect(cancelled).toContain("Build it was cancelled");
+  });
+
+  it("offers Ask for the rest and no Retry when incomplete", () => {
+    const attention = { id: stepId, title: "Check", error: "gave up", action: "ask-again" as const };
+    const html = renderRequests([
+      row({ title: 'A "quoted" <b>', status: "done", delivery: d("incomplete", attention) }),
+    ]);
+    expect(html).toContain("The request may still be missing work. gave up");
+    expect(html).not.toContain('data-action="retry"');
+    expect(html).toContain(
+      'class="starter" data-action="starter" data-text="Finish the work still missing from: A &quot;quoted&quot; &lt;b&gt;">Ask for the rest</button>',
+    );
+  });
+
+  it("shows only the error for a failed request and omits an empty one", () => {
+    const attention = { id: rid, title: "Make a tracker", error: "bad", action: "retry" as const };
+    const failed = renderRequests([row({ status: "failed", delivery: d("failed", attention) })]);
+    expect(failed).toContain('<p class="request-error">bad</p>');
+    expect(failed).toContain(`data-action="retry" data-id="${rid}"`);
+    const cancelled = renderRequests([
+      row({ status: "cancelled", delivery: d("cancelled", { ...attention, error: null }) }),
+    ]);
+    expect(cancelled).not.toContain("request-error");
+    expect(cancelled).toContain('data-action="retry"');
+  });
+
+  it("shows no buttons for delivered, building and verifying, and keeps Cancel when queued", () => {
+    for (const state of ["delivered", "building", "verifying"] as const) {
+      expect(renderRequests([row({ status: "done", delivery: d(state) })])).not.toMatch(/<button/);
+    }
+    const queued = renderRequests([row({ delivery: d("planning") })]);
+    expect(queued).toContain(`data-action="cancel" data-id="${rid}"`);
+  });
+
+  it("omits progress when delivered only", () => {
+    const progress = { done: 2, total: 2 };
+    expect(renderRequests([row({ status: "done", progress, delivery: d("delivered") })])).not.toContain("progress");
+    expect(renderRequests([row({ status: "done", progress, delivery: d("building") })])).toContain("2 of 2 done");
+  });
+
+  it("escapes the step title and error", () => {
+    const attention = { id: stepId, title: "<img src=x>", error: "<script>", action: "retry" as const };
+    const html = renderRequests([row({ status: "done", delivery: d("needs-attention", attention) })]);
+    expect(html).toContain("&lt;img src=x&gt; failed: &lt;script&gt;");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script>");
   });
 });
 
