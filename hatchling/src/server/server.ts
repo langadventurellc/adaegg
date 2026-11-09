@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import type { DatabaseSync } from "node:sqlite";
 import { handleApi } from "./api.ts";
 import { checkRequest } from "./guard.ts";
@@ -129,6 +129,17 @@ export function createUiServer(opts: UiServerOptions): UiServer {
     });
   });
 
+  // Upgraded sockets leave node's connection list, and an upgrade nobody handles (vite: false, an
+  // unknown protocol or path) stays open, so every socket is tracked and destroyed on stop.
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  function destroySockets() {
+    for (const socket of sockets) socket.destroy();
+  }
+
   // Registered before Vite attaches its own upgrade listener, so it runs first. Vite's listener only
   // acts on the vite-hmr and vite-ping protocols and its Host check is skipped for vite-ping and does
   // not check the port, so a refused upgrade is closed here and its protocol header is blanked so
@@ -203,6 +214,7 @@ export function createUiServer(opts: UiServerOptions): UiServer {
       }
       server.close(() => resolve());
       server.closeAllConnections();
+      destroySockets();
     });
   }
 
@@ -210,6 +222,7 @@ export function createUiServer(opts: UiServerOptions): UiServer {
     stopping ??= (async () => {
       if (vite) await vite.close();
       server.closeAllConnections();
+      destroySockets();
       await closeHttp();
     })();
     return stopping;

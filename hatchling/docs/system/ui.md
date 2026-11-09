@@ -17,11 +17,25 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
 
 | Route | Body | Response |
 | --- | --- | --- |
-| `GET /api/state` | | `{ name, queue }`: `name` is the stored name or `null`; `queue` has `counts` per status and the newest top-level `requests` |
+| `GET /api/state` | | 200 `{ name, queue }` (shapes below) |
 | `POST /api/name` | `{ name }` | 200 `{ name }` with the cleaned name; 400 when the name is invalid |
 | `POST /api/ask` | `{ text }` | 201 `{ id, title }`: creates a work item of kind `request` |
-| `POST /api/items/<id>/retry` | `{}` | 200 with the new status; 404 unknown id; 409 when the item cannot be retried |
-| `POST /api/items/<id>/cancel` | `{}` | 200 with the new status; 404 unknown id; 409 when the item cannot be cancelled |
+| `POST /api/items/<id>/retry` | `{}` | 200 `{ id, status }` with `status` `"queued"`; 404 unknown id; 409 when the item cannot be retried |
+| `POST /api/items/<id>/cancel` | `{}` | 200 `{ id, status }` with `status` `"cancelled"`; 404 unknown id; 409 when the item cannot be cancelled |
+
+`GET /api/state` shapes:
+
+- `name`: `string | null`, the stored name or `null` when none is set.
+- `queue.counts`: an object with one `number` per status (every status is present, zero included).
+- `queue.requests`: an array of at most 20 rows, newest first. They are the top-level items (no parent) of kind `request` or `item`. Each row is:
+  - `id: string`, the full id.
+  - `title: string`.
+  - `kind: "request" | "item"`.
+  - `status: string`, one of the statuses in `counts`.
+  - `error: string | null`.
+  - `createdAt: string`, as stored.
+  - `progress: { done: number, total: number } | null`: counts of the row's child items of kind `item` (`done` are those with status `done`); `null` when it has none. `verify` children are not counted.
+  - `blockedBy: string[]`, ids of the items it waits for (empty when none).
 
 Anything asked through `/api/ask` is a `request`, which the daemon plans into items and verifies (see [workflows](workflows.md)), so the user never writes a spec.
 

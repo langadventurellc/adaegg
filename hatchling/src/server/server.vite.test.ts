@@ -107,6 +107,34 @@ it("keeps live reload on the loopback server and opens no second listener", asyn
   expect(await connectRefused(port)).toBe(true);
 });
 
+it("stop closes allowed-Host upgrades that Vite ignores", async () => {
+  server = createUiServer({ db: openDb(":memory:"), root: dir, port: 0, vite: true });
+  const { port } = await server.start();
+  const host = `127.0.0.1:${port}`;
+  const closed: Promise<void>[] = [];
+  for (const [protocol, path] of [
+    [null, "/"],
+    ["unknown-protocol", "/"],
+    ["vite-hmr", "/not-the-hmr-path"],
+  ] as const) {
+    // Raw sockets: an ignored upgrade never gets a response, so there is nothing to await but the close.
+    const socket = connect({ host: "127.0.0.1", port });
+    socket.resume(); // an unread socket never sees the server's close
+    closed.push(new Promise((resolve) => socket.once("close", () => resolve())));
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+    socket.write(
+      `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+        (protocol === null ? "" : `Sec-WebSocket-Protocol: ${protocol}\r\n`) +
+        "\r\n",
+    );
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await server.stop();
+  await Promise.all(closed);
+  expect(await connectRefused(port)).toBe(true);
+});
+
 it("answers 500 internal error when a module fails to transform", async () => {
   writeFileSync(join(dir, "broken.ts"), "const = ;");
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

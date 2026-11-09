@@ -46,6 +46,25 @@ afterEach(async () => {
 });
 
 describe("createUiServer", () => {
+  it("stop closes upgrade sockets that nothing handles when vite is off", async () => {
+    const { server, port } = await begin();
+    const closed: Promise<void>[] = [];
+    for (const host of [`127.0.0.1:${port}`, "evil.example"]) {
+      const socket = connect({ host: "127.0.0.1", port });
+      socket.resume(); // an unread socket never sees the server's close
+      closed.push(new Promise((resolve) => socket.once("close", () => resolve())));
+      await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+      socket.write(
+        `GET / HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+          "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await server.stop();
+    await Promise.all(closed);
+    expect(await refused(port)).toBe(true);
+  });
+
   it("serves state with no-store", async () => {
     const { url } = await begin();
     const res = await fetch(`${url}/api/state`);
