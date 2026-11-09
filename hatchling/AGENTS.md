@@ -11,6 +11,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `workflows/`: workflow YAML files, loaded at daemon start.
 - `prompts/`: the role prompts the agent nodes send.
 - `src/ui/`: the browser UI (a placeholder for now).
+- `src/names/`: the names list, the suggestion picker and name validation for onboarding.
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
 - `docs/`: guides and system docs (see Docs below).
 - `adaegg.json`: marks the repo root.
@@ -46,6 +47,7 @@ hatch start            # run the daemon under the supervisor (also `npm start`)
 | [queue](docs/system/queue.md) | you need the work item fields, statuses or claiming rules |
 | [workflows](docs/system/workflows.md) | you need the workflow YAML, edges, runs or shipped workflows |
 | [agents](docs/system/agents.md) | you are touching the agent nodes, prompts or transcripts |
+| [names](docs/system/names.md) | you are changing the onboarding names list, the suggestion picker or name validation |
 | [restart and rollback](docs/system/restart-and-rollback.md) | you are touching the supervisor or a self-change merge |
 
 Update the docs this file names whenever you change what they describe.
