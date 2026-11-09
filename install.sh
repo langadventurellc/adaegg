@@ -1,6 +1,7 @@
 #!/bin/sh
 # Ada Egg one-line installer.
 #   curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/install.sh | bash
+# or, with options:
 #   curl -fsSL <url> | bash -s -- my-hatchling --skip-check
 # Arguments pass through to `adaegg init`. ADAEGG_SOURCE=<dir> uses a clone instead of downloading;
 # ADAEGG_REF=<ref> picks the branch or tag to download (default main).
@@ -60,10 +61,19 @@ main() {
   [ -f "$src/installer/main.ts" ] || fail "installer not found in $src."
 
   echo "Creating your hatchling..."
-  # stdin from /dev/null: when this script is piped into the shell, the child would read the rest of it.
+  # The piped script stays off the installer's stdin either way (the child would read the rest of it):
+  # it gets the keyboard when the terminal can be opened, else /dev/null.
+  # ADAEGG_TTY exists for tests, to stand in for /dev/tty.
   # Not exec'ed, so the trap still removes the temporary directory.
+  tty=${ADAEGG_TTY:-/dev/tty}
   status=0
-  node "$src/installer/main.ts" init "$@" </dev/null || status=$?
+  # /dev/tty can be readable by mode yet fail to open without a controlling terminal, so try the open.
+  # In a subshell: a failed redirect on the special builtin `:` would exit a POSIX shell.
+  if [ -r "$tty" ] && (: <"$tty") 2>/dev/null; then
+    node "$src/installer/main.ts" init "$@" <"$tty" || status=$?
+  else
+    node "$src/installer/main.ts" init "$@" </dev/null || status=$?
+  fi
   exit "$status"
 }
 
