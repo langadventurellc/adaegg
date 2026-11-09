@@ -223,7 +223,21 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<num
       out("Running the hatchling's own checks...");
       const check = await npm(["run", "check"], target);
       if (!check.ok) {
-        throw new InitError(`The repo was created in ${target} but its checks failed:\n${tail(check.output)}`);
+        const logPath = join(target, ".adaegg", "logs", "install-check.log");
+        let logged = true;
+        try {
+          mkdirSync(dirname(logPath), { recursive: true });
+          writeFileSync(logPath, check.output);
+        } catch {
+          logged = false;
+        }
+        out("");
+        out(`${name} was created in ${target}, but its self-check didn't pass on this machine.`);
+        out("This often happens on a busy machine right after install.");
+        out(logged ? `The full output is in ${logPath}` : "The full output could not be saved to a log file.");
+        out(`Run the check again with: cd ${quoteIfSpaced(target)} && npm run check`);
+        out("You can also start it anyway with `npm start` in that folder.");
+        return 1;
       }
     }
   } catch (err) {

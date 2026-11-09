@@ -38,7 +38,7 @@ The name you give is set during the install, so onboarding is skipped. A hatchli
 - runs `npm install`;
 - sets the hatchling's name;
 - makes the first commit;
-- runs the hatchling's own `npm run check` (`--skip-check` skips this);
+- runs the hatchling's own `npm run check` (`--skip-check` skips this); a failed check keeps the hatchling, writes `.adaegg/logs/install-check.log` and doesn't start it;
 - starts the hatchling and opens your browser (`--no-start` stops after installing).
 
 The repository is local only. Nothing is pushed anywhere. You may add your own remote later.
