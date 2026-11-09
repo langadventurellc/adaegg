@@ -563,11 +563,47 @@ describe("start --open and --detach", () => {
         return code;
       }) as unknown as Supervisor;
 
+    // A supervisor that publishes readiness, then runs a little longer than the poll interval.
+    const real = { sleep: () => new Promise<void>((r) => setTimeout(r, 5)), now: () => Date.now(), timeoutMs: 2000 };
+    const lingering = () =>
+      vi.fn(async () => {
+        readyWithUrl();
+        await new Promise((r) => setTimeout(r, 100));
+        return 0;
+      }) as unknown as Supervisor;
+    const running = (name: string) => `${name} is running at ${url} (press Ctrl-C to stop)\n`;
+
+    it("prints the name, address and how to stop without --open", async () => {
+      await hatch(["name", "Pip"]);
+      const open = vi.fn();
+      const r = await hatch(["start"], { start: { ...real, open, supervisor: lingering() } });
+      expect(r).toEqual({ code: 0, out: running("Pip"), err: "" });
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it("says Your hatchling when no name is set", async () => {
+      const r = await hatch(["start"], { start: { ...real, supervisor: lingering() } });
+      expect(r).toEqual({ code: 0, out: running("Your hatchling"), err: "" });
+    });
+
+    it("prints the running line and then opens with --open", async () => {
+      await hatch(["name", "Pip"]);
+      const open = vi.fn();
+      const r = await hatch(["start", "--open"], { start: { ...real, open, supervisor: lingering() } });
+      expect(r.out).toBe(running("Pip"));
+      expect(open.mock.calls).toEqual([[url]]);
+    });
+
+    it("says Your hatchling with --open when no name is set", async () => {
+      const r = await hatch(["start", "--open"], { start: { ...real, open: vi.fn(), supervisor: lingering() } });
+      expect(r.out).toBe(running("Your hatchling"));
+    });
+
     it("opens the url once while the supervisor runs", async () => {
       const open = vi.fn();
       const supervisor = supervisorFor(open);
       const r = await hatch(["start", "--open"], { start: { ...fast, open, supervisor } });
-      expect(r).toEqual({ code: 0, out: "", err: "" });
+      expect(r).toEqual({ code: 0, out: running("Your hatchling"), err: "" });
       expect(supervisor).toHaveBeenCalledTimes(1);
       expect(open.mock.calls).toEqual([[url]]);
     });
@@ -579,7 +615,7 @@ describe("start --open and --detach", () => {
       const supervisor = supervisorFor(open);
       const r = await hatch(["start", "--open"], { start: { ...fast, open, supervisor } });
       expect(r.code).toBe(0);
-      expect(r.out).toBe(`open this address in your browser: ${url}\n`);
+      expect(r.out).toBe(`${running("Your hatchling")}open this address in your browser: ${url}\n`);
       expect(supervisor).toHaveBeenCalledTimes(1);
     });
 
