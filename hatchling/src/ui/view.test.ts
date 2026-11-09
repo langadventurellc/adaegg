@@ -24,6 +24,7 @@ function row(over: Partial<RequestRow> = {}): RequestRow {
     createdAt: "2026-01-01T00:00:00Z",
     progress: null,
     blockedBy: [],
+    delivery: null,
     ...over,
   };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { EXHAUSTED_ROUNDS_PREFIX } from "../engine/nodes/enqueue.ts";
 import type { ListedWorkItem } from "../engine/store.ts";
-import { summarizeQueue, titleFromText } from "./queue.ts";
+import { deliveryOf, summarizeQueue, titleFromText } from "./queue.ts";
 
 let seq = 0;
 function item(over: Partial<ListedWorkItem>): ListedWorkItem {
@@ -93,5 +94,93 @@ describe("summarizeQueue", () => {
     const parent = item({ kind: "request" });
     const summary = summarizeQueue([parent, item({ parentId: parent.id, kind: "verify" })]);
     expect(summary.requests[0]?.progress).toBeNull();
+  });
+});
+
+describe("deliveryOf", () => {
+  const parentOf = (status: ListedWorkItem["status"], over: Partial<ListedWorkItem> = {}) =>
+    item({ kind: "request", status, ...over });
+  const step = (p: ListedWorkItem, over: Partial<ListedWorkItem> = {}) =>
+    item({ parentId: p.id, kind: "item", ...over });
+  const verify = (p: ListedWorkItem, over: Partial<ListedWorkItem> = {}) =>
+    item({ parentId: p.id, kind: "verify", ...over });
+
+  it("is planning while the parent is queued or in progress", () => {
+    expect(deliveryOf(parentOf("queued"), [])).toEqual({ state: "planning", attention: null });
+    expect(deliveryOf(parentOf("in_progress"), [])).toEqual({ state: "planning", attention: null });
+  });
+
+  it("keeps failed and cancelled parents as they are", () => {
+    const failed = parentOf("failed", { error: "boom" });
+    expect(deliveryOf(failed, [])).toEqual({
+      state: "failed",
+      attention: { id: failed.id, title: failed.title, error: "boom", action: "retry" },
+    });
+    const cancelled = parentOf("cancelled", { error: "ignored" });
+    expect(deliveryOf(cancelled, [])).toEqual({
+      state: "cancelled",
+      attention: { id: cancelled.id, title: cancelled.title, error: null, action: "retry" },
+    });
+  });
+
+  it("is building while a step is queued, verifying when only verifications remain", () => {
+    const p = parentOf("done");
+    expect(deliveryOf(p, [step(p, { status: "done" }), step(p, { status: "queued" })]).state).toBe("building");
+    expect(deliveryOf(p, [step(p, { status: "done" }), verify(p, { status: "queued" })]).state).toBe("verifying");
+    expect(deliveryOf(p, [step(p, { status: "done" }), verify(p, { status: "in_progress" })]).state).toBe("verifying");
+  });
+
+  it("needs attention for a failed step even when another step runs", () => {
+    const p = parentOf("done");
+    const bad = step(p, { status: "failed", error: "nope" });
+    const d = deliveryOf(p, [step(p, { status: "in_progress" }), bad, verify(p, { status: "queued" })]);
+    expect(d).toEqual({
+      state: "needs-attention",
+      attention: { id: bad.id, title: bad.title, error: "nope", action: "retry" },
+    });
+  });
+
+  it("needs attention for a cancelled step with a null error", () => {
+    const p = parentOf("done");
+    const bad = step(p, { status: "cancelled" });
+    expect(deliveryOf(p, [bad]).attention).toEqual({ id: bad.id, title: bad.title, error: null, action: "retry" });
+  });
+
+  it("retries a verify with an ordinary error", () => {
+    const p = parentOf("done");
+    const v = verify(p, { status: "failed", error: "not signed in" });
+    expect(deliveryOf(p, [step(p, { status: "done" }), v])).toEqual({
+      state: "needs-attention",
+      attention: { id: v.id, title: v.title, error: "not signed in", action: "retry" },
+    });
+  });
+
+  it("is incomplete when verification ran out of rounds", () => {
+    const p = parentOf("done");
+    const v = verify(p, {
+      status: "failed",
+      error: `${EXHAUSTED_ROUNDS_PREFIX} 2 verification rounds (maxVerifyRounds).`,
+    });
+    const d = deliveryOf(p, [step(p, { status: "done" }), v]);
+    expect(d.state).toBe("incomplete");
+    expect(d.attention).toMatchObject({ id: v.id, action: "ask-again" });
+  });
+
+  it("is delivered when everything is done or there is nothing to do", () => {
+    const p = parentOf("done");
+    expect(deliveryOf(p, [step(p, { status: "done" }), verify(p, { status: "done" })])).toEqual({
+      state: "delivered",
+      attention: null,
+    });
+    expect(deliveryOf(p, []).state).toBe("delivered");
+    expect(deliveryOf(p, [step(p, { status: "done" })]).state).toBe("delivered");
+  });
+
+  it("is set on request rows and null on top-level items", () => {
+    const req = parentOf("done");
+    const plain = item({ kind: "item" });
+    const rows = summarizeQueue([req, plain, step(req, { status: "queued" })]).requests;
+    expect(rows.find((r) => r.id === req.id)?.delivery?.state).toBe("building");
+    expect(rows.find((r) => r.id === plain.id)?.delivery).toBeNull();
   });
 });

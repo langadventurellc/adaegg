@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../engine/db.ts";
-import { addWorkItem, claimNext, failWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
+import { addWorkItem, claimNext, failWorkItem, finishWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
 import { handleApi } from "./api.ts";
 
 const get = (db: ReturnType<typeof openDb>, path: string) => handleApi(db, { method: "GET", path, body: undefined });
@@ -97,6 +97,32 @@ describe("handleApi retry and cancel", () => {
     const db = openDb(":memory:");
     const added = addWorkItem(db, { title: "x" });
     expect(post(db, `/api/items/${added.id.slice(0, 8)}/cancel`).body).toEqual({ id: added.id, status: "cancelled" });
+  });
+});
+
+describe("handleApi delivery", () => {
+  it("reports delivery and follows a retried child step", () => {
+    const db = openDb(":memory:");
+    const request = addWorkItem(db, { title: "req", kind: "request" });
+    claimNext(db, "request");
+    finishWorkItem(db, request.id);
+    const child = addWorkItem(db, { title: "step one", parentId: request.id });
+    claimNext(db, "item");
+    failWorkItem(db, child.id, "boom");
+
+    const rowOf = () =>
+      (get(db, "/api/state").body as { queue: { requests: Array<{ id: string; status: string; delivery: unknown }> } })
+        .queue.requests[0];
+    expect(rowOf()).toMatchObject({
+      status: "done",
+      delivery: {
+        state: "needs-attention",
+        attention: { id: child.id, title: "step one", error: "boom", action: "retry" },
+      },
+    });
+
+    expect(post(db, `/api/items/${child.id}/retry`, {}).status).toBe(200);
+    expect(rowOf()?.delivery).toEqual({ state: "building", attention: null });
   });
 });
 

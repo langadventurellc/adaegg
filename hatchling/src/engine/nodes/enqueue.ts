@@ -4,6 +4,8 @@ import { defineNode } from "./types.ts";
 
 const TITLE_LIMIT = 100;
 
+export const EXHAUSTED_ROUNDS_PREFIX = "the request still has missing work after";
+
 export const enqueueNode = defineNode({
   type: "enqueue",
   outcomes: ["queued", "failed"],
@@ -41,7 +43,7 @@ export const enqueueNode = defineNode({
         return {
           outcome: "failed",
           problem:
-            `the request still has missing work after ${maxVerifyRounds} verification rounds (maxVerifyRounds). ` +
+            `${EXHAUSTED_ROUNDS_PREFIX} ${maxVerifyRounds} verification rounds (maxVerifyRounds). ` +
             `The verifier wanted: ${wanted}. Look at it with hatch show ${root.id.slice(0, 8)} and decide.`,
         };
       }
