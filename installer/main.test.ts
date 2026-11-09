@@ -15,10 +15,21 @@ function setup() {
     cwd: tmpdir(),
     env: {},
   };
+  let code = 0;
   const fake = async (options: InitOptions) => {
     calls.push(options);
+    return code;
   };
-  return { io, out, err, calls, fake };
+  return {
+    io,
+    out,
+    err,
+    calls,
+    fake,
+    exitWith: (n: number) => {
+      code = n;
+    },
+  };
 }
 
 describe("runCli", () => {
@@ -36,16 +47,41 @@ describe("runCli", () => {
     expect(s.calls).toEqual([]);
   });
 
-  it("defaults the folder to hatchling", async () => {
+  it("leaves name and folder unset by default", async () => {
     const s = setup();
     expect(await runCli(["init"], s.io, { runInit: s.fake })).toBe(0);
-    expect(s.calls).toEqual([{ dir: "hatchling", skipCheck: false }]);
+    expect(s.calls).toEqual([{ name: undefined, dir: undefined, skipCheck: false, noStart: false }]);
   });
 
   it("passes the folder and --skip-check", async () => {
     const s = setup();
     await runCli(["init", "mine", "--skip-check"], s.io, { runInit: s.fake });
-    expect(s.calls).toEqual([{ dir: "mine", skipCheck: true }]);
+    expect(s.calls).toEqual([{ name: undefined, dir: "mine", skipCheck: true, noStart: false }]);
+  });
+
+  it("passes --name, --dir and --no-start", async () => {
+    const s = setup();
+    await runCli(["init", "--name", "Pip Moss", "--dir", "here", "--no-start"], s.io, { runInit: s.fake });
+    expect(s.calls).toEqual([{ name: "Pip Moss", dir: "here", skipCheck: false, noStart: true }]);
+  });
+
+  it("rejects a positional folder together with --dir", async () => {
+    const s = setup();
+    expect(await runCli(["init", "a", "--dir", "b"], s.io, { runInit: s.fake })).toBe(1);
+    expect(s.err.join("")).toContain("adaegg: ");
+    expect(s.calls).toEqual([]);
+  });
+
+  it("returns the exit code of init", async () => {
+    const s = setup();
+    s.exitWith(3);
+    expect(await runCli(["init"], s.io, { runInit: s.fake })).toBe(3);
+  });
+
+  it("documents the new flags in HELP", () => {
+    for (const word of ["[<dir>]", "--name <name>", "--dir <dir>", "--no-start", "--skip-check"]) {
+      expect(HELP).toContain(word);
+    }
   });
 
   it("prints an InitError as adaegg: <message>", async () => {

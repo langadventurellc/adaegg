@@ -95,7 +95,8 @@ done`,
 function run(bin: string, args: string[], env: Record<string, string> = {}, cwd = tempDir(), input?: string) {
   const result = spawnSync("/bin/sh", input === undefined ? [script, ...args] : ["-s", "--", ...args], {
     cwd,
-    env: { PATH: bin, HOME: cwd, ...env },
+    // Never let a test reach the real /dev/tty.
+    env: { PATH: bin, HOME: cwd, ADAEGG_TTY: join(cwd, "no-such-tty"), ...env },
     encoding: "utf8",
     input: input ?? "",
   });
@@ -164,11 +165,62 @@ describe("install.sh with ADAEGG_SOURCE", () => {
     const source = tempDir();
     mkdirSync(join(source, "installer"));
     writeFileSync(join(source, "installer", "main.ts"), "");
-    const r = run(bin, ["my-dir"], { ADAEGG_SOURCE: source }, undefined, readFileSync(script, "utf8"));
+    const noTty = join(tempDir(), "missing-tty");
+    const r = run(
+      bin,
+      ["my-dir"],
+      { ADAEGG_SOURCE: source, ADAEGG_TTY: noTty },
+      undefined,
+      readFileSync(script, "utf8"),
+    );
     expect(r.status).toBe(0);
     const lines = records(record);
     expect(lines).toContain(`argv:${source}/installer/main.ts init my-dir`);
     expect(lines).toContain("stdin:");
+  });
+
+  describe("keyboard", () => {
+    function setup() {
+      const made = makeBin();
+      const source = tempDir();
+      mkdirSync(join(source, "installer"));
+      writeFileSync(join(source, "installer", "main.ts"), "");
+      const ttyFile = join(tempDir(), "tty");
+      writeFileSync(ttyFile, "Pip\n");
+      const missing = join(tempDir(), "missing-tty");
+      return { ...made, source, ttyFile, missing };
+    }
+    const piped = () => readFileSync(script, "utf8");
+
+    it("gives the installer the tty when it can be opened", () => {
+      const { bin, record, source, ttyFile } = setup();
+      const r = run(bin, [], { ADAEGG_SOURCE: source, ADAEGG_TTY: ttyFile });
+      expect(r.status).toBe(0);
+      expect(records(record)).toContain("stdin:Pip");
+    });
+
+    it("gives the installer no stdin when the tty is missing", () => {
+      const { bin, record, source, missing } = setup();
+      const r = run(bin, [], { ADAEGG_SOURCE: source, ADAEGG_TTY: missing });
+      expect(r.status).toBe(0);
+      expect(records(record)).toContain("stdin:");
+    });
+
+    it("gives a piped script's installer the tty, not the script", () => {
+      const { bin, record, source, ttyFile } = setup();
+      const r = run(bin, [], { ADAEGG_SOURCE: source, ADAEGG_TTY: ttyFile }, undefined, piped());
+      expect(r.status).toBe(0);
+      const lines = records(record);
+      expect(lines).toContain("stdin:Pip");
+      expect(lines.join("\n")).not.toContain("set -eu");
+    });
+
+    it("gives a piped script's installer no stdin when the tty is missing", () => {
+      const { bin, record, source, missing } = setup();
+      const r = run(bin, [], { ADAEGG_SOURCE: source, ADAEGG_TTY: missing }, undefined, piped());
+      expect(r.status).toBe(0);
+      expect(records(record)).toContain("stdin:");
+    });
   });
 
   it("fails when ADAEGG_SOURCE is not a directory", () => {
