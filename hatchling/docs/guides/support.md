@@ -59,4 +59,4 @@ It never removes the worktrees or branches of `failed`, `cancelled` or unfinishe
 
 - **`git reset` on the base branch.** It discards history that the daemon, the queue and other worktrees refer to. Undo a merge with `git revert -m 1 <mergeCommit>`, which adds a commit.
 - **Edit `.adaegg/` or the database by hand.** The daemon and the queue assume they own those files; a manual edit can corrupt a run or make the daemon resume the wrong node. Use `hatch cancel` and `hatch retry`.
-- **Run two daemons on one repo.** They would claim and merge concurrently, and each would restart or roll back the other's work. Check `hatch status` shows `daemon  down` before starting one.
+- **Run two daemons on one repo.** They would claim and merge concurrently, and each would restart or roll back the other's work. Check `hatch status` shows `daemon  down` and no `supervisor` line before starting one. `hatch start` refuses when a live supervisor is recorded in `supervisor.json`.
