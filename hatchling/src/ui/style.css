@@ -137,6 +137,28 @@ button:disabled {
   padding: 0;
 }
 
+.pages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pages li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid GrayText;
+  overflow-wrap: anywhere;
+}
+
+.pages a,
+.page-header a {
+  color: LinkText;
+}
+
+.page-header {
+  margin-bottom: 1.5rem;
+  font-weight: 600;
+}
+
 .request {
   display: flex;
   flex-wrap: wrap;

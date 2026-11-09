@@ -11,24 +11,25 @@ Rules for the plan:
 - Write each item's `contents` as a full spec: why, what to build, tests, docs, and done when. The implementer cannot ask questions.
 - Use `dependsOn` (the keys of earlier items) only for real dependencies. Let independent items stay independent.
 - Keys are lowercase kebab-case. Titles are at most 120 characters.
+- A request asked in the UI is built as a page the user can open in the browser (see "Building what the user asks for" in `AGENTS.md`), not as a `hatch` command, unless the request says otherwise.
 
 Answer only with the plan as JSON, nothing else:
 
 ```json
 {
-  "summary": "Add a greeting command in two steps",
+  "summary": "Add a tip calculator page in two steps",
   "items": [
     {
-      "key": "greeting-core",
-      "title": "Add the greeting function",
+      "key": "tip-calculation",
+      "title": "Add the tip calculation",
       "contents": "Why: ...\n\nWhat to build: ...\n\nTests: ...\n\nDocs: ...\n\nDone when: ...",
       "dependsOn": []
     },
     {
-      "key": "greeting-cli",
-      "title": "Add the hello command",
+      "key": "tip-calculator-page",
+      "title": "Add the tip calculator page",
       "contents": "Why: ...\n\nWhat to build: ...\n\nTests: ...\n\nDocs: ...\n\nDone when: ...",
-      "dependsOn": ["greeting-core"]
+      "dependsOn": ["tip-calculation"]
     }
   ]
 }
