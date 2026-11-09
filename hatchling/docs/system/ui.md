@@ -72,7 +72,7 @@ The browser tab title is `Ask <name>` on the ask screen and `Ada Egg` (the produ
 
 To change the starter requests, edit `STARTER_REQUESTS` in `src/ui/starters.ts` (keep 10 to 12 single-line entries of at most 120 characters). To change the look, edit `src/ui/style.css`; it uses CSS system colours so it follows the user's light or dark theme.
 
-Polling runs every 3 seconds while the page is visible, and once when it becomes visible again. A poll replaces only the inner HTML of `#requests`, never the whole page, so text being typed and focus are kept. A full render happens only when the screen changes.
+Polling runs every 3 seconds while the page is visible, and once when it becomes visible again. A poll replaces only the inner HTML of `#requests`, never the whole page, so text being typed and focus are kept. Polling never does a full render except when the screen changes or a late first suggestion arrives. A fetch that started before a finished action (Ask, Retry, Cancel, naming) is dropped as stale, and each action refreshes at once afterwards, so a slow poll can neither hide nor undo it (`Session` and `applyFetchResult` in `state.ts`).
 
 Every user-visible string, whether from the user or the server (names, request titles, errors), goes through `escapeHtml` in `view.ts` before it is put in markup.
 

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { NAMES, type NameEntry } from "../names/names.ts";
+import type { RequestRow } from "../server/queue.ts";
 import {
+  actionFinished,
   anotherSuggestion,
   applyFetched,
+  applyFetchResult,
   applyUnreachable,
-  errorAfterRefresh,
+  type FetchResult,
+  initialSession,
   initialState,
   nameSaved,
   type ScreenState,
@@ -81,11 +85,52 @@ describe("state transitions", () => {
   });
 });
 
-describe("errorAfterRefresh", () => {
-  it("keeps an action error through the refresh that follows it, and clears it on a plain poll", () => {
-    expect(errorAfterRefresh("Too long", true)).toBe("Too long");
-    expect(errorAfterRefresh("Too long", false)).toBeNull();
-    expect(errorAfterRefresh(null, true)).toBeNull();
+describe("session sequencing", () => {
+  const row = { id: "r1" } as unknown as RequestRow;
+  const fetched = (name: string | null): FetchResult => ({
+    kind: "state",
+    state: { name, queue: { requests: [row] } },
+  });
+
+  it("applies a fetch started in the current epoch", () => {
+    const s = applyFetchResult(initialSession(), 0, fetched("Hopper"), () => 0);
+    expect(s.screen.state?.name).toBe("Hopper");
+    expect(s.rows).toEqual([row]);
+  });
+
+  it("drops a poll that started before an action finished, so it cannot undo the action", () => {
+    let s = initialSession();
+    const startedBefore = s.epoch;
+    s = { ...s, screen: nameSaved(s.screen, "Hopper") };
+    s = actionFinished(s);
+    const after = applyFetchResult(s, startedBefore, fetched(null), () => 0);
+    expect(after).toBe(s);
+    expect(after.screen.state?.name).toBe("Hopper");
+    // The refresh the action starts afterwards is applied.
+    const fresh = applyFetchResult(s, s.epoch, fetched("Hopper"), () => 0);
+    expect(fresh.rows).toEqual([row]);
+  });
+
+  it("drops stale failures too", () => {
+    const s = actionFinished(initialSession());
+    expect(applyFetchResult(s, 0, { kind: "unreachable" }, () => 0)).toBe(s);
+    expect(applyFetchResult(s, 0, { kind: "error", message: "x" }, () => 0)).toBe(s);
+  });
+
+  it("keeps an action error through its refresh and clears it on a plain poll", () => {
+    const s = { ...initialSession(), error: "Too long" };
+    expect(applyFetchResult(s, 0, fetched("A"), () => 0, true).error).toBe("Too long");
+    expect(applyFetchResult(s, 0, fetched("A"), () => 0).error).toBeNull();
+  });
+
+  it("records unreachable and errors, and a later success clears unreachable", () => {
+    let s = applyFetchResult(initialSession(), 0, { kind: "unreachable" }, () => 0);
+    expect(s.screen.unreachable).toBe(true);
+    s = applyFetchResult(s, 0, { kind: "error", message: "boom" }, () => 0);
+    expect(s.error).toBe("boom");
+    s = applyFetchResult(s, 0, fetched("A"), () => 0);
+    expect(s.screen.unreachable).toBe(false);
+    expect(s.error).toBeNull();
   });
 });
 

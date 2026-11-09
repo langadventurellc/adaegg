@@ -1,5 +1,6 @@
 import type { NameEntry } from "../names/names.ts";
 import { pickSuggestions } from "../names/suggest.ts";
+import type { RequestRow } from "../server/queue.ts";
 
 export type FetchedState = { name: string | null };
 
@@ -70,9 +71,44 @@ export function anotherSuggestion(s: ScreenState, random: () => number, pick: Pi
   return withSuggestion(s, entry, restart);
 }
 
-// An error raised by a user action survives the refresh that follows it; the next poll clears it.
-export function errorAfterRefresh(current: string | null, keepActionError: boolean): string | null {
-  return keepActionError ? current : null;
+// What the shell keeps between renders: the screen state, the request rows, the banner error, and an
+// epoch that counts finished user actions. A fetch remembers the epoch it started in; if an action
+// finished meanwhile, the answer may predate it and is dropped (the action's own refresh follows).
+export type Session = { screen: ScreenState; rows: RequestRow[]; error: string | null; epoch: number };
+
+export type FetchResult =
+  | { kind: "state"; state: FetchedState & { queue: { requests: RequestRow[] } } }
+  | { kind: "unreachable" }
+  | { kind: "error"; message: string };
+
+export function initialSession(): Session {
+  return { screen: initialState(), rows: [], error: null, epoch: 0 };
+}
+
+// Call when a user action's API call has returned (success or not).
+export function actionFinished(session: Session): Session {
+  return { ...session, epoch: session.epoch + 1 };
+}
+
+// Fold a fetch result into the session. `keepActionError` keeps the error an action just raised
+// through the refresh that follows it; a plain poll clears it on success.
+export function applyFetchResult(
+  session: Session,
+  startedEpoch: number,
+  result: FetchResult,
+  random: () => number,
+  keepActionError = false,
+  pick: Picker = pickSuggestions,
+): Session {
+  if (startedEpoch !== session.epoch) return session;
+  if (result.kind === "unreachable") return { ...session, screen: applyUnreachable(session.screen) };
+  if (result.kind === "error") return { ...session, error: result.message };
+  return {
+    ...session,
+    screen: applyFetched(session.screen, result.state, random, pick),
+    rows: result.state.queue.requests,
+    error: keepActionError ? session.error : null,
+  };
 }
 
 export function setError(s: ScreenState, error: string | null): ScreenState {

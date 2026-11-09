@@ -1,16 +1,16 @@
 import "./style.css";
 import { validateName } from "../names/validate.ts";
-import type { RequestRow } from "../server/queue.ts";
 import { ApiError, createClient, UnreachableError } from "./client.ts";
 import { pickStarters } from "./starters.ts";
 import {
+  actionFinished,
   anotherSuggestion,
-  applyFetched,
+  applyFetchResult,
   applyUnreachable,
-  errorAfterRefresh,
-  initialState,
+  type FetchResult,
+  initialSession,
   nameSaved,
-  type ScreenState,
+  type Session,
   setError,
   setValue,
   startRename,
@@ -25,20 +25,19 @@ const app = document.querySelector<HTMLElement>("#app");
 const client = createClient("");
 const starters = pickStarters(Math.random);
 
-let s: ScreenState = initialState();
-let rows: RequestRow[] = [];
-let errorMessage: string | null = null;
+let session: Session = initialSession();
 let shownScreen: string | null = null;
 let shownSuggestion = false;
-let polling = false;
+let polling = false; // only polls are single-flight; a refresh after an action always runs
 
 function currentScreen(): "onboarding" | "ask" {
-  return screenFor(s.state, s.editingName, false) === "ask" ? "ask" : "onboarding";
+  const { state, editingName } = session.screen;
+  return screenFor(state, editingName, false) === "ask" ? "ask" : "onboarding";
 }
 
 function bannerHtml(): string {
-  if (s.unreachable) return renderBanner("restarting", RESTARTING_MESSAGE);
-  if (errorMessage !== null) return renderBanner("error", errorMessage);
+  if (session.screen.unreachable) return renderBanner("restarting", RESTARTING_MESSAGE);
+  if (session.error !== null) return renderBanner("error", session.error);
   return "";
 }
 
@@ -49,15 +48,16 @@ function renderBannerSlot(): void {
 
 function renderRequestsSlot(): void {
   const slot = document.querySelector("#requests");
-  if (slot) slot.innerHTML = renderRequests(rows);
+  if (slot) slot.innerHTML = renderRequests(session.rows);
 }
 
 function fullRender(): void {
   if (!app) return;
+  const s = session.screen;
   const screen = currentScreen();
   const body =
     screen === "ask"
-      ? renderAsk({ name: s.state?.name ?? "", starters, requests: rows })
+      ? renderAsk({ name: s.state?.name ?? "", starters, requests: session.rows })
       : renderOnboarding({ suggestion: s.suggestion, value: s.value, error: s.error, current: s.current });
   app.innerHTML = `<div id="banner">${bannerHtml()}</div><main>${body}</main>`;
   document.title = screen === "ask" ? `Ask ${s.state?.name ?? ""}` : "Ada Egg";
@@ -67,7 +67,7 @@ function fullRender(): void {
 
 function render(): void {
   // A suggestion that arrives late (first load failed) redraws onboarding once; after that the form is the user's.
-  const lateSuggestion = shownScreen === "onboarding" && !shownSuggestion && s.suggestion !== null;
+  const lateSuggestion = shownScreen === "onboarding" && !shownSuggestion && session.screen.suggestion !== null;
   if (currentScreen() !== shownScreen || lateSuggestion) fullRender();
   else {
     renderBannerSlot();
@@ -79,21 +79,29 @@ function describe(err: unknown): string {
   return err instanceof Error ? err.message : "Something went wrong.";
 }
 
-async function refresh(keepActionError = false): Promise<void> {
-  if (polling) return;
-  polling = true;
-  try {
-    const fetched = await client.getState();
-    rows = fetched.queue.requests;
-    s = applyFetched(s, fetched, Math.random);
-    errorMessage = errorAfterRefresh(errorMessage, keepActionError);
-  } catch (err) {
-    if (err instanceof UnreachableError) s = applyUnreachable(s);
-    else errorMessage = describe(err);
-  } finally {
-    polling = false;
+async function refresh(keepActionError = false, isPoll = false): Promise<void> {
+  if (isPoll) {
+    if (polling) return;
+    polling = true;
   }
+  const startedEpoch = session.epoch;
+  let result: FetchResult;
+  try {
+    result = { kind: "state", state: await client.getState() };
+  } catch (err) {
+    result = err instanceof UnreachableError ? { kind: "unreachable" } : { kind: "error", message: describe(err) };
+  } finally {
+    if (isPoll) polling = false;
+  }
+  // An answer that predates a finished action is dropped inside applyFetchResult.
+  session = applyFetchResult(session, startedEpoch, result, Math.random, keepActionError);
   render();
+}
+
+// Run after an action's API call returns, so any fetch already in flight counts as stale.
+async function refreshAfterAction(keepActionError: boolean): Promise<void> {
+  session = actionFinished(session);
+  await refresh(keepActionError);
 }
 
 function focusById(id: string, select = false): void {
@@ -114,10 +122,10 @@ async function withDisabled(button: HTMLButtonElement | null, work: () => Promis
 async function submitName(form: HTMLFormElement): Promise<void> {
   const input = form.querySelector<HTMLInputElement>("#name-input");
   const raw = input?.value ?? "";
-  s = setValue(s, raw);
+  session = { ...session, screen: setValue(session.screen, raw) };
   const checked = validateName(raw);
   if (!checked.ok) {
-    s = setError(s, checked.error);
+    session = { ...session, screen: setError(session.screen, checked.error) };
     fullRender();
     focusById("name-input");
     return;
@@ -126,23 +134,35 @@ async function submitName(form: HTMLFormElement): Promise<void> {
   await withDisabled(button, async () => {
     try {
       const saved = await client.setName(checked.name);
-      s = nameSaved(s, saved.name);
-      errorMessage = null;
+      session = { ...session, screen: nameSaved(session.screen, saved.name), error: null };
       fullRender();
       focusById("ask-text");
-      await refresh();
+      await refreshAfterAction(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        s = setError(s, err.message);
+        session = { ...session, screen: setError(session.screen, err.message) };
       } else if (err instanceof UnreachableError) {
-        s = applyUnreachable(s);
+        session = { ...session, screen: applyUnreachable(session.screen) };
       } else {
-        errorMessage = describe(err);
+        session = { ...session, error: describe(err) };
       }
       fullRender();
       focusById("name-input");
     }
   });
+}
+
+// Runs an API call for an action, records its failure, then refreshes at once.
+async function runAction(call: () => Promise<unknown>): Promise<void> {
+  try {
+    await call();
+    session = { ...session, error: null };
+  } catch (err) {
+    if (err instanceof UnreachableError) session = { ...session, screen: applyUnreachable(session.screen) };
+    else session = { ...session, error: describe(err) };
+  }
+  await refreshAfterAction(session.error !== null);
+  renderBannerSlot();
 }
 
 async function submitAsk(form: HTMLFormElement): Promise<void> {
@@ -154,16 +174,12 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
   }
   const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
   await withDisabled(button, async () => {
-    try {
+    let asked = false;
+    await runAction(async () => {
       await client.ask(text);
-      if (textarea) textarea.value = "";
-      errorMessage = null;
-    } catch (err) {
-      if (err instanceof UnreachableError) s = applyUnreachable(s);
-      else errorMessage = describe(err);
-    }
-    await refresh(errorMessage !== null);
-    renderBannerSlot();
+      asked = true;
+    });
+    if (asked && textarea) textarea.value = "";
     textarea?.focus();
   });
 }
@@ -171,17 +187,7 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
 async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel"): Promise<void> {
   const id = button.dataset.id;
   if (!id) return;
-  await withDisabled(button, async () => {
-    try {
-      await client[action](id);
-      errorMessage = null;
-    } catch (err) {
-      if (err instanceof UnreachableError) s = applyUnreachable(s);
-      else errorMessage = describe(err);
-    }
-    await refresh(errorMessage !== null);
-    renderBannerSlot();
-  });
+  await withDisabled(button, () => runAction(() => client[action](id)));
 }
 
 app?.addEventListener("click", (event) => {
@@ -189,13 +195,13 @@ app?.addEventListener("click", (event) => {
   if (!button) return;
   switch (button.dataset.action) {
     case "another": {
-      s = anotherSuggestion(s, Math.random);
+      session = { ...session, screen: anotherSuggestion(session.screen, Math.random) };
       fullRender();
       focusById("name-input", true);
       break;
     }
     case "rename": {
-      s = startRename(s);
+      session = { ...session, screen: startRename(session.screen) };
       fullRender();
       focusById("name-input", true);
       break;
@@ -223,14 +229,14 @@ app?.addEventListener("submit", (event) => {
 });
 
 setInterval(() => {
-  if (!document.hidden) void refresh();
+  if (!document.hidden) void refresh(false, true);
 }, POLL_MS);
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) void refresh();
+  if (!document.hidden) void refresh(false, true);
 });
 
-void refresh().then(() => {
+void refresh(false, true).then(() => {
   // The first render is always a full one, whatever the screen is.
   if (shownScreen === null) fullRender();
 });
