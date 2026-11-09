@@ -136,6 +136,30 @@ export function deleteReady(stateDir: string): void {
   rmSync(readyPath(stateDir), { force: true });
 }
 
+export const SupervisorSchema = z.object({ pid: z.number().int() });
+export type SupervisorRecord = z.infer<typeof SupervisorSchema>;
+
+export const supervisorPath = (stateDir: string): string => join(stateDir, "supervisor.json");
+
+export function writeSupervisor(stateDir: string, record: SupervisorRecord): void {
+  writeJsonAtomic(stateDir, supervisorPath(stateDir), SupervisorSchema.parse(record));
+}
+
+export function readSupervisor(stateDir: string): SupervisorRecord | null {
+  try {
+    const text = readText(supervisorPath(stateDir));
+    if (text === null) return null;
+    const parsed = SupervisorSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export function deleteSupervisor(stateDir: string): void {
+  rmSync(supervisorPath(stateDir), { force: true });
+}
+
 const RESTART_PREFIXES = ["src/", "workflows/", "prompts/", "bin/"];
 const RESTART_FILES = ["package.json", "package-lock.json", "adaegg.json"];
 
