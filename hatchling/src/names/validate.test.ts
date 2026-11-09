@@ -22,11 +22,21 @@ describe("validateName", () => {
   });
 
   it("rejects empty, blank, bad first characters and bad characters", () => {
-    for (const raw of ["", "   ", "7up", "-Fu", "a<b", "a/b", "a\nb", "a\tb"]) {
+    for (const raw of ["", "   ", "7up", "-Fu", "a<b", "a/b", "a\nb", "Name½", "Name²", "Name①"]) {
       const result = validateName(raw);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.length).toBeGreaterThan(0);
     }
+  });
+
+  it("accepts digits after the first letter", () => {
+    expect(validateName("R2D2")).toEqual({ ok: true, name: "R2D2" });
+  });
+
+  it("collapses non-breaking, thin and tab whitespace to single spaces", () => {
+    expect(validateName("Fei Fei")).toEqual({ ok: true, name: "Fei Fei" });
+    expect(validateName("Fei   Fei")).toEqual({ ok: true, name: "Fei Fei" });
+    expect(validateName("Fei\tFei")).toEqual({ ok: true, name: "Fei Fei" });
   });
 
   it("accepts Ada", () => {

@@ -22,7 +22,8 @@ const COMMON_NAMES = [
 const MIN_ENTRIES = 80;
 const MAX_KNOWN_FOR = 90;
 
-function sizeAndUniqueness(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function sizeAndUniqueness(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   if (list.length < MIN_ENTRIES) {
     errors.push(`list has ${list.length} entries, need at least ${MIN_ENTRIES}`);
@@ -36,7 +37,8 @@ function sizeAndUniqueness(list: readonly NameEntry[]): string[] {
   return errors;
 }
 
-function noAda(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function noAda(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   for (const e of list) {
     if (normalise(e.name) === "ada") errors.push(`${e.name}: name is Ada`);
@@ -45,7 +47,8 @@ function noAda(list: readonly NameEntry[]): string[] {
   return errors;
 }
 
-function completeEntries(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function completeEntries(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   for (const e of list) {
     if (e.person.trim() === "") errors.push(`${e.name}: person is empty`);
@@ -59,7 +62,8 @@ function completeEntries(list: readonly NameEntry[]): string[] {
   return errors;
 }
 
-function genderBalance(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function genderBalance(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   for (const g of GENDERS) {
     const share = list.filter((e) => e.gender === g).length / list.length;
@@ -70,7 +74,8 @@ function genderBalance(list: readonly NameEntry[]): string[] {
   return errors;
 }
 
-function regionBalance(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function regionBalance(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   let present = 0;
   for (const r of REGIONS) {
@@ -86,7 +91,8 @@ function regionBalance(list: readonly NameEntry[]): string[] {
   return errors;
 }
 
-function fieldBalance(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function fieldBalance(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   for (const f of FIELDS) {
     const count = list.filter((e) => e.field === f).length;
@@ -95,11 +101,13 @@ function fieldBalance(list: readonly NameEntry[]): string[] {
   return errors;
 }
 
-function distinctive(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function distinctive(list: readonly NameEntry[]): string[] {
   return list.filter((e) => COMMON_NAMES.includes(normalise(e.name))).map((e) => `${e.name}: name is too common`);
 }
 
-function validNames(list: readonly NameEntry[]): string[] {
+// biome-ignore lint/suspicious/noExportsInTest: the rule helpers are exported for test, as the work item requires
+export function validNames(list: readonly NameEntry[]): string[] {
   const errors: string[] = [];
   for (const e of list) {
     const result = validateName(e.name);

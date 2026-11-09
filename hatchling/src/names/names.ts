@@ -284,7 +284,7 @@ export const NAMES: readonly NameEntry[] = [
     region: "central-asia",
     gender: "man",
     field: "computer-science",
-    knownFor: "wrote the algebra text whose name gave us the word algorithm",
+    knownFor: "wrote early texts on algebra; his name gave us the word algorithm",
   },
   // philosophy
   {
