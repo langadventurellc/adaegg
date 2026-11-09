@@ -12,42 +12,32 @@ Early: version 0.1.0. Tested on Linux. macOS should work. Windows is untested.
 
 - Node 24 or newer
 - git
+- curl or wget, for the install line
 - A Claude login (what the `claude` command creates) or `ANTHROPIC_API_KEY`
-- pnpm, only if you install from a clone (see below)
 
-Nothing else: no Postgres, Docker, Kubernetes or mise. A hatchling itself needs only npm, and its queue is the built-in `node:sqlite`. pnpm is used only to build the installer from a clone.
+Nothing else: no pnpm, Postgres, Docker, Kubernetes or mise. A hatchling itself needs only npm, and its queue is the built-in `node:sqlite`.
 
 ## Quick start
 
-### Install from a clone
-
-This works today.
-
 ```
-git clone https://github.com/langadventurellc/adaegg
-cd adaegg
-pnpm install
-pnpm build
-node bin/adaegg.mjs init ../my-hatchling
-cd ../my-hatchling
+curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/install.sh | bash
+cd hatchling
 npm start
 ```
 
-This route needs pnpm, which comes from `mise.toml` (if you use mise) or from Corepack (`corepack enable`). Run `pnpm build` before `node bin/adaegg.mjs`, because that script runs the compiled installer.
-
-### With npx, once the package is published
-
-`adaegg` is not on npm yet, so this does not work until it is published.
+To choose the folder, pass it after `bash -s --`:
 
 ```
-npx adaegg init my-hatchling
+curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/install.sh | bash -s -- my-hatchling
 cd my-hatchling
 npm start
 ```
 
+The install line works once the repository is public.
+
 Then open the line printed as `hatchling UI: <url>`. The UI is on 127.0.0.1, port 4747 or a free port if that one is taken. Onboarding asks you to name your hatchling. It suggests a name, never "Ada", and you may type anything. After that the screen is `Ask <name>` with some suggested starter requests. Pick one or write your own.
 
-`adaegg init [<dir>] [--skip-check]` creates your own repository (the folder defaults to `hatchling`). From a clone you run it as `node bin/adaegg.mjs init`; once published, as `npx adaegg init`. It:
+`adaegg init [<dir>] [--skip-check]` creates your own repository (the folder defaults to `hatchling`). The install line runs it for you, and you can add `--skip-check` after the folder (`bash -s -- my-hatchling --skip-check`). It:
 
 - copies the hatchling template into the folder;
 - runs `git init` on branch `main`;
@@ -112,6 +102,16 @@ The hatchling's [AGENTS.md](hatchling/AGENTS.md) is written for LLM agents, such
 ## Developing Ada Egg itself
 
 This repository holds the installer (`installer/`) and the template that `adaegg init` copies (`hatchling/`). It uses pnpm.
+
+To try the installer from a clone, no pnpm install or build is needed:
+
+```
+node installer/main.ts init ../my-hatchling
+```
+
+`ADAEGG_SOURCE=. sh install.sh my-hatchling` tests the install script from a clone.
+
+To work on the repository itself:
 
 ```
 pnpm install
