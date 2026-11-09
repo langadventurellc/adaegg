@@ -25,7 +25,18 @@ describe("loadConfig", () => {
       checksTimeoutMinutes: 20,
       maxConcurrentRuns: 1,
       models: { implement: "sonnet", review: "sonnet" },
+      ui: { enabled: true, port: 4747 },
     });
+  });
+
+  it("defaults the ui settings that are not named", () => {
+    writeFileSync(join(dir, "adaegg.json"), '{ "schema": 1, "ui": { "port": 0 } }');
+    expect(loadConfig(dir).ui).toEqual({ enabled: true, port: 0 });
+  });
+
+  it.each(["70000", "-1", "1.5"])("rejects ui.port %s", (port) => {
+    writeFileSync(join(dir, "adaegg.json"), `{ "schema": 1, "ui": { "port": ${port} } }`);
+    expect(() => loadConfig(dir)).toThrow("ui.port");
   });
 
   it("defaults a model that is not named and accepts overrides", () => {
