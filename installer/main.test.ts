@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { InitError, type InitOptions } from "./init.ts";
@@ -11,7 +12,7 @@ function setup() {
   const io = {
     stdout: { write: (t: string) => out.push(t) },
     stderr: { write: (t: string) => err.push(t) },
-    cwd: "/tmp",
+    cwd: tmpdir(),
     env: {},
   };
   const fake = async (options: InitOptions) => {
