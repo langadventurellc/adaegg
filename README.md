@@ -21,31 +21,25 @@ Nothing else: no pnpm, Postgres, Docker, Kubernetes or mise. A hatchling itself 
 
 ```
 curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/install.sh | bash
-cd hatchling
-npm start
 ```
 
-To choose the folder, pass it after `bash -s --`:
+It asks for a name and a folder, installs your hatchling there, starts it and opens your browser on `Ask <name>`. The install line works once the repository is public.
 
-```
-curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/install.sh | bash -s -- my-hatchling
-cd my-hatchling
-npm start
-```
+To start it again later, run `cd <folder> && npm start`, or ask your coding agent to start it. You can run the install line again to hatch another one: each lives in its own folder and on its own port (4747, or a free port if that one is taken).
 
-The install line works once the repository is public.
+The name you give is set during the install, so onboarding is skipped. A hatchling installed by an older version has no name yet, and its onboarding screen still asks for one (it suggests a name, never "Ada", and you may type anything). The screen is `Ask <name>` with some suggested starter requests. Pick one or write your own.
 
-Then open the line printed as `hatchling UI: <url>`. The UI is on 127.0.0.1, port 4747 or a free port if that one is taken. Onboarding asks you to name your hatchling. It suggests a name, never "Ada", and you may type anything. After that the screen is `Ask <name>` with some suggested starter requests. Pick one or write your own.
-
-`adaegg init [<dir>] [--skip-check]` creates your own repository (the folder defaults to `hatchling`). The install line runs it for you, and you can add `--skip-check` after the folder (`bash -s -- my-hatchling --skip-check`). It:
+`adaegg init [<dir>] [--name <name>] [--dir <dir>] [--no-start] [--skip-check]` creates your own repository. The install line runs it for you; to pass options, add them after `bash -s --`. In a terminal it asks for a name (suggesting one) and a folder; `--name` and `--dir` (or `<dir>`, the same thing) answer for you. Without a terminal it never asks: the name is `--name` or a suggestion, and the folder defaults to a folder named after the hatchling under the current directory. It:
 
 - copies the hatchling template into the folder;
 - runs `git init` on branch `main`;
 - sets a local git identity only when you have none;
 - turns commit and tag signing off in that repo, because agents cannot answer a passphrase prompt;
 - runs `npm install`;
+- sets the hatchling's name;
 - makes the first commit;
-- runs the hatchling's own `npm run check` (`--skip-check` skips this).
+- runs the hatchling's own `npm run check` (`--skip-check` skips this);
+- starts the hatchling and opens your browser (`--no-start` stops after installing).
 
 The repository is local only. Nothing is pushed anywhere. You may add your own remote later.
 
