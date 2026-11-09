@@ -203,13 +203,20 @@ describe("runInit", () => {
 
   it("reports a failed check and keeps the commit", async () => {
     const s = setup({ failOn: "check" });
-    const err = await runInit({ dir: "mine", skipCheck: false }, s.deps).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(InitError);
-    const message = (err as Error).message;
-    expect(message).toContain("The repo was created in");
-    expect(message).toContain("line 60");
-    expect(message).not.toContain("line 1\n");
-    expect(git(join(s.cwd, "mine"), s.env, "log", "--format=%s")).toBe("Create hatchling");
+    const target = join(s.cwd, "mine");
+    const code = await runInit({ dir: "mine", skipCheck: false }, s.deps);
+    expect(code).not.toBe(0);
+    expect(git(target, s.env, "log", "--format=%s")).toBe("Create hatchling");
+    expect(git(target, s.env, "status", "--porcelain")).toBe("");
+    const logPath = join(target, ".adaegg", "logs", "install-check.log");
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("line 1\n");
+    expect(log).toContain("line 60");
+    const text = s.text();
+    expect(text).toContain(logPath);
+    expect(text).toContain("npm run check");
+    expect(text).toContain("npm start");
+    expect(text).not.toContain("left in place");
   });
 
   it("refuses a non-empty folder and an existing file", async () => {
@@ -404,11 +411,12 @@ describe("runInit name command and start", () => {
       mode: "inherit",
     });
     expect(s.order.at(-1)).toBe("node start");
+    expect(existsSync(join(s.cwd, "mine", ".adaegg", "logs", "install-check.log"))).toBe(false);
   });
 
   it("does not start when the check fails", async () => {
     const s = setup({ failOn: "check" });
-    await expect(runInit({ name: "Pip", dir: "mine", noStart: false }, s.deps)).rejects.toThrow(InitError);
+    expect(await runInit({ name: "Pip", dir: "mine", noStart: false }, s.deps)).not.toBe(0);
     expect(s.nodeCalls.some((c) => c.args[1] === "start")).toBe(false);
   });
 
