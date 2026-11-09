@@ -171,7 +171,7 @@ export const NAMES: readonly NameEntry[] = [
     region: "western-europe",
     gender: "woman",
     field: "information-theory",
-    knownFor: "co-invented network coding for reliable data networks",
+    knownFor: "co-invented random linear network coding for reliable data networks",
   },
   {
     name: "Daubechies",
