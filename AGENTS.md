@@ -22,6 +22,7 @@ Later versions may add other agent providers, sharing or templates between hatch
 - `hatchling/` is the template that a setup command copies into a user's repo; it uses npm and has its own `biome.jsonc` and `tsconfig.json`.
 - `installer/` is the `adaegg init` source, compiled to `dist/installer` for publishing because Node does not strip types under `node_modules`.
 - `bin/adaegg.mjs` is the published `adaegg` entry; it imports the compiled `dist/installer/main.js`.
+- `scripts/` holds the public-repo scanner (`public-scan.ts`) and the `scan:history` script.
 - There is no pnpm workspace. Root devDependencies hold everything the template uses, and `tests/template-pin.test.ts` pins the template's versions to them.
 
 ## Commands
@@ -34,6 +35,7 @@ pnpm format      # fix what Biome can fix automatically, in both
 pnpm typecheck   # tsc on hatchling/tsconfig.json; also covers installer/
 pnpm test        # Vitest from the root, including hatchling/**/*.test.ts
 pnpm build       # typecheck, then vite build into hatchling/dist; also compiles installer/ into dist/installer
+pnpm scan:history  # scan the whole git history for secrets and private names; run before making the repo public
 ```
 
 `pnpm dev` serves only the template's front end from Vite, without the daemon, so API calls fail there.
@@ -43,5 +45,6 @@ pnpm build       # typecheck, then vite build into hatchling/dist; also compiles
 - ESM, strict TypeScript.
 - Small, focused modules.
 - Write tests with every change.
+- This repository is public. `tests/public-repo.test.ts` fails on secret-shaped strings, private hosts, IPs, home paths, internal tool names and unknown email addresses. To add a private term, add its ROT13 form to `scripts/public-scan.ts`; never write the term itself in a file or commit message.
 
 Before considering any change done: `pnpm lint && pnpm typecheck && pnpm test && pnpm build` must pass.
