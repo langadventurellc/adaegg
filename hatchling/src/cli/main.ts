@@ -41,6 +41,7 @@ export type CliIo = {
   start?: {
     open?: (url: string) => void | Promise<void>;
     spawn?: (args: SpawnArgs) => void;
+    supervisor?: typeof runSupervisor;
     isPidAlive?: (pid: number) => boolean;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
@@ -168,16 +169,31 @@ async function waitForUrl(dir: string, deps: StartDeps, signal: { stopped: boole
   }
 }
 
-function defaultOpen(url: string): Promise<void> {
-  return new Promise((done) => {
-    const child = spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.on("error", () => done());
-    child.on("spawn", () => {
+const OPEN_WAIT_MS = 5_000;
+
+// Rejects when the opener is missing, can't start or exits unsuccessfully, so openUrl prints the address.
+export function defaultOpen(
+  url: string,
+  launch: typeof spawn = spawn,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  return new Promise((done, fail) => {
+    const command = platform === "darwin" ? "open" : "xdg-open";
+    const child = launch(command, [url], { detached: true, stdio: "ignore" });
+    // An opener that stays up (a browser started in the foreground) has opened the page.
+    const timer = setTimeout(() => {
       child.unref();
       done();
+    }, OPEN_WAIT_MS);
+    timer.unref();
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      fail(err);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) done();
+      else fail(new Error(`${command} exited with ${code}`));
     });
   });
 }
@@ -466,7 +482,7 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       const opened = values.open ? openWhenReady(io, dir, signal) : Promise.resolve();
       let code: number;
       try {
-        code = await runSupervisor({
+        code = await (io.start?.supervisor ?? runSupervisor)({
           root,
           stateDir: dir,
           config: loadConfig(root),

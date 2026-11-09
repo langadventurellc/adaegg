@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   appendFileSync,
   copyFileSync,
@@ -14,7 +15,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../engine/db.ts";
-import { type CliIo, openWhenReady, runCli, type SpawnArgs } from "./main.ts";
+import { type CliIo, defaultOpen, openWhenReady, runCli, type SpawnArgs } from "./main.ts";
 
 // Every call opens and migrates a fresh database; on a slow disk that alone nears the 5s default.
 vi.setConfig({ testTimeout: 30_000 });
@@ -453,6 +454,8 @@ describe("name", () => {
   });
 });
 
+type Supervisor = Required<NonNullable<CliIo["start"]>>["supervisor"];
+
 describe("start --open and --detach", () => {
   const url = "http://127.0.0.1:4321/";
   const readyWithUrl = () => {
@@ -549,6 +552,82 @@ describe("start --open and --detach", () => {
     open.mockClear();
     await openWhenReady(io, join(base, "nowhere"), { stopped: true });
     expect(open).not.toHaveBeenCalled();
+  });
+
+  describe("foreground", () => {
+    // A supervisor that publishes readiness, waits for the opener to run, then ends.
+    const supervisorFor = (open: ReturnType<typeof vi.fn>, code = 0) =>
+      vi.fn(async () => {
+        readyWithUrl();
+        await vi.waitFor(() => expect(open).toHaveBeenCalled());
+        return code;
+      }) as unknown as Supervisor;
+
+    it("opens the url once while the supervisor runs", async () => {
+      const open = vi.fn();
+      const supervisor = supervisorFor(open);
+      const r = await hatch(["start", "--open"], { start: { ...fast, open, supervisor } });
+      expect(r).toEqual({ code: 0, out: "", err: "" });
+      expect(supervisor).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls).toEqual([[url]]);
+    });
+
+    it("keeps the supervisor running when the opener rejects", async () => {
+      const open = vi.fn(async () => {
+        throw new Error("no opener");
+      });
+      const supervisor = supervisorFor(open);
+      const r = await hatch(["start", "--open"], { start: { ...fast, open, supervisor } });
+      expect(r.code).toBe(0);
+      expect(r.out).toBe(`open this address in your browser: ${url}\n`);
+      expect(supervisor).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens nothing without --open", async () => {
+      const open = vi.fn();
+      const supervisor = vi.fn(async () => 0) as unknown as Supervisor;
+      const r = await hatch(["start"], { start: { ...fast, open, supervisor } });
+      expect(r.code).toBe(0);
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("default opener", () => {
+    const fakeChild = () => {
+      const child = new EventEmitter() as EventEmitter & { unref: () => void };
+      child.unref = () => {};
+      return child;
+    };
+    const launching = (child: EventEmitter) =>
+      vi.fn(() => child) as unknown as typeof import("node:child_process").spawn;
+
+    it("uses open on macOS and xdg-open elsewhere", async () => {
+      for (const [platform, command] of [
+        ["darwin", "open"],
+        ["linux", "xdg-open"],
+      ] as const) {
+        const child = fakeChild();
+        const launch = launching(child);
+        const done = defaultOpen(url, launch, platform);
+        child.emit("exit", 0);
+        await done;
+        expect(launch).toHaveBeenCalledWith(command, [url], { detached: true, stdio: "ignore" });
+      }
+    });
+
+    it("rejects when the opener is missing", async () => {
+      const child = fakeChild();
+      const done = defaultOpen(url, launching(child), "linux");
+      child.emit("error", new Error("spawn xdg-open ENOENT"));
+      await expect(done).rejects.toThrow("ENOENT");
+    });
+
+    it("rejects when the opener exits unsuccessfully", async () => {
+      const child = fakeChild();
+      const done = defaultOpen(url, launching(child), "linux");
+      child.emit("exit", 3);
+      await expect(done).rejects.toThrow("exited with 3");
+    });
   });
 
   it("is in the help", async () => {
