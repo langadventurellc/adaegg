@@ -70,6 +70,11 @@ export function anotherSuggestion(s: ScreenState, random: () => number, pick: Pi
   return withSuggestion(s, entry, restart);
 }
 
+// An error raised by a user action survives the refresh that follows it; the next poll clears it.
+export function errorAfterRefresh(current: string | null, keepActionError: boolean): string | null {
+  return keepActionError ? current : null;
+}
+
 export function setError(s: ScreenState, error: string | null): ScreenState {
   return { ...s, error };
 }

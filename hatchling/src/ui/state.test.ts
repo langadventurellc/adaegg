@@ -4,6 +4,7 @@ import {
   anotherSuggestion,
   applyFetched,
   applyUnreachable,
+  errorAfterRefresh,
   initialState,
   nameSaved,
   type ScreenState,
@@ -77,6 +78,14 @@ describe("state transitions", () => {
     const s = initialState();
     expect(setValue(s, "x").value).toBe("x");
     expect(setError(s, "e").error).toBe("e");
+  });
+});
+
+describe("errorAfterRefresh", () => {
+  it("keeps an action error through the refresh that follows it, and clears it on a plain poll", () => {
+    expect(errorAfterRefresh("Too long", true)).toBe("Too long");
+    expect(errorAfterRefresh("Too long", false)).toBeNull();
+    expect(errorAfterRefresh(null, true)).toBeNull();
   });
 });
 

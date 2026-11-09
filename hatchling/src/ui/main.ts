@@ -7,6 +7,7 @@ import {
   anotherSuggestion,
   applyFetched,
   applyUnreachable,
+  errorAfterRefresh,
   initialState,
   nameSaved,
   type ScreenState,
@@ -28,6 +29,7 @@ let s: ScreenState = initialState();
 let rows: RequestRow[] = [];
 let errorMessage: string | null = null;
 let shownScreen: string | null = null;
+let shownSuggestion = false;
 let polling = false;
 
 function currentScreen(): "onboarding" | "ask" {
@@ -60,10 +62,13 @@ function fullRender(): void {
   app.innerHTML = `<div id="banner">${bannerHtml()}</div><main>${body}</main>`;
   document.title = screen === "ask" ? `Ask ${s.state?.name ?? ""}` : "Ada Egg";
   shownScreen = screen;
+  shownSuggestion = s.suggestion !== null;
 }
 
 function render(): void {
-  if (currentScreen() !== shownScreen) fullRender();
+  // A suggestion that arrives late (first load failed) redraws onboarding once; after that the form is the user's.
+  const lateSuggestion = shownScreen === "onboarding" && !shownSuggestion && s.suggestion !== null;
+  if (currentScreen() !== shownScreen || lateSuggestion) fullRender();
   else {
     renderBannerSlot();
     renderRequestsSlot();
@@ -74,14 +79,14 @@ function describe(err: unknown): string {
   return err instanceof Error ? err.message : "Something went wrong.";
 }
 
-async function refresh(): Promise<void> {
+async function refresh(keepActionError = false): Promise<void> {
   if (polling) return;
   polling = true;
   try {
     const fetched = await client.getState();
     rows = fetched.queue.requests;
     s = applyFetched(s, fetched, Math.random);
-    errorMessage = null;
+    errorMessage = errorAfterRefresh(errorMessage, keepActionError);
   } catch (err) {
     if (err instanceof UnreachableError) s = applyUnreachable(s);
     else errorMessage = describe(err);
@@ -157,7 +162,7 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
       if (err instanceof UnreachableError) s = applyUnreachable(s);
       else errorMessage = describe(err);
     }
-    await refresh();
+    await refresh(errorMessage !== null);
     renderBannerSlot();
     textarea?.focus();
   });
@@ -174,7 +179,7 @@ async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel")
       if (err instanceof UnreachableError) s = applyUnreachable(s);
       else errorMessage = describe(err);
     }
-    await refresh();
+    await refresh(errorMessage !== null);
     renderBannerSlot();
   });
 }
