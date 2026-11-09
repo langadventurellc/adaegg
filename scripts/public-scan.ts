@@ -40,10 +40,10 @@ const RULES: Rule[] = [
   { id: "tailscale", regex: /tskey-[A-Za-z0-9-]{10,}/g },
   { id: "tailscale", regex: /[A-Za-z0-9-]+\.ts\.net\b/g },
   { id: "private-host", regex: /https?:\/\/[^\s/"']*\.(internal|lan|local|home\.arpa)\b/g },
-  { id: "private-ip", regex: /(?<![\d.])10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g },
-  { id: "private-ip", regex: /(?<![\d.])172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/g },
-  { id: "private-ip", regex: /(?<![\d.])192\.168\.\d{1,3}\.\d{1,3}\b/g },
-  { id: "private-ip", regex: /(?<![\d.])100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/g },
+  { id: "private-ip", regex: /\b(?<![\d.])10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g },
+  { id: "private-ip", regex: /\b(?<![\d.])172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/g },
+  { id: "private-ip", regex: /\b(?<![\d.])192\.168\.\d{1,3}\.\d{1,3}\b/g },
+  { id: "private-ip", regex: /\b(?<![\d.])100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/g },
   { id: "home-path", regex: new RegExp(`/(?:home|Users)/(?!(?:${PLACEHOLDER_NAMES})/)[^/\\s]+/`, "g") },
   { id: "internal-tool", regex: INTERNAL_TOOL },
   {
@@ -124,12 +124,22 @@ export function scanHistory(root: string): Finding[] {
   const skip = new Set<string>();
   let commit = "";
   let path = "";
+  let inHeader = false;
   log.split("\n").forEach((line, i) => {
     const head = /^commit ([0-9a-f]{40})$/.exec(line);
     if (head?.[1]) {
       commit = head[1].slice(0, 8);
       path = "";
-    } else if (line.startsWith("+++ b/")) {
+      inHeader = false;
+    } else if (line.startsWith("diff --git ")) {
+      // A new file diff: forget the previous file's path until its own header names one.
+      path = "";
+      inHeader = true;
+    } else if (inHeader && line.startsWith("@@")) {
+      inHeader = false;
+    } else if (inHeader && line.startsWith("--- a/")) {
+      path = line.slice("--- a/".length);
+    } else if (inHeader && line.startsWith("+++ b/")) {
       path = line.slice("+++ b/".length);
     }
     scanLine(line, i + 1, path ? `${commit} ${path}` : commit, skip, out);
