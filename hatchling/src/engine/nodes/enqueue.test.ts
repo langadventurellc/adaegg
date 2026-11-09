@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../db.ts";
 import type { Plan } from "../plan.ts";
 import { addWorkItem, getWorkItem, type ListedWorkItem, listWorkItems } from "../store.ts";
-import { enqueueNode } from "./enqueue.ts";
+import { EXHAUSTED_ROUNDS_PREFIX, enqueueNode } from "./enqueue.ts";
 import { builtinNodeTypes } from "./index.ts";
 import { makeCtx } from "./test-repo.ts";
 
@@ -112,6 +112,7 @@ describe("enqueue node", () => {
     const result = await enqueueNode.run(ctx as never);
     expect(result.outcome).toBe("failed");
     expect(result.problem).toContain("maxVerifyRounds");
+    expect(result.problem?.startsWith(EXHAUSTED_ROUNDS_PREFIX)).toBe(true);
     expect(result.problem).toContain('"Missing one", "Missing two"');
     expect(result.problem).toContain(`hatch show ${root.id.slice(0, 8)}`);
     expect(listWorkItems(db)).toHaveLength(2);
