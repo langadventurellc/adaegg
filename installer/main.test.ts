@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { InitError, type InitOptions } from "./init.ts";
 import { HELP, runCli } from "./main.ts";
@@ -54,5 +56,12 @@ describe("runCli", () => {
     });
     expect(code).toBe(1);
     expect(s.err.join("")).toBe("adaegg: boom\n");
+  });
+
+  it("prints HELP when the module is executed directly", () => {
+    const out = execFileSync(process.execPath, [fileURLToPath(new URL("./main.ts", import.meta.url)), "--help"], {
+      encoding: "utf8",
+    });
+    expect(out).toBe(HELP);
   });
 });

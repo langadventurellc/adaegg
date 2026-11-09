@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { runInit } from "./init.ts";
 
@@ -73,4 +75,9 @@ export async function main(): Promise<void> {
     cwd: process.cwd(),
     env: process.env,
   });
+}
+
+const entry = process.argv[1];
+if (entry !== undefined && import.meta.url === pathToFileURL(realpathSync(entry)).href) {
+  await main();
 }

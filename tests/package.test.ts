@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,7 +85,16 @@ describe("generated tree", () => {
       },
     };
     writeFileSync(join(target, "package-lock.json"), `${JSON.stringify(lock, null, 2)}\n`);
-    const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1" };
+    const home = join(temp, "home");
+    mkdirSync(home);
+    writeFileSync(join(temp, "gitconfig"), "");
+    const env = {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: home,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: join(temp, "gitconfig"),
+    };
     execFileSync("git", ["init", "-q"], { cwd: target, env });
     symlinkSync(join(repoRoot, "node_modules"), join(target, "node_modules"));
     const bin = (name: string) => join(repoRoot, "node_modules/.bin", name);
