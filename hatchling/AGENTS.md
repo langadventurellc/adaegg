@@ -10,7 +10,8 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 - `src/cli/`: the `hatch` CLI.
 - `workflows/`: workflow YAML files, loaded at daemon start.
 - `prompts/`: the role prompts the agent nodes send.
-- `src/ui/`: the browser UI (a placeholder for now).
+- `src/server/`: the local UI server: guard, API, queue summary and Vite middleware.
+- `src/ui/`: the browser UI (a placeholder for now), served by `src/server/`.
 - `src/names/`: the names list, the suggestion picker and name validation for onboarding.
 - `bin/hatch`: CLI entry point (`bin/hatch <command>`, or `npm run hatch -- <command>`).
 - `docs/`: guides and system docs (see Docs below).
@@ -30,7 +31,7 @@ hatch show <id> [--json]   # also lists the item's runs and node runs
 hatch runs [--limit n]     # newest runs first (default 20)
 hatch cancel <id>      # queued items only
 hatch retry <id>       # failed or cancelled items only
-hatch status           # count per status, then `daemon  up (pid n)` or `daemon  down`
+hatch status           # count per status, then `daemon  up (pid n)` or `daemon  down`, then `ui  <url>` when the UI is up
 hatch start            # run the daemon under the supervisor (also `npm start`)
 ```
 
@@ -48,13 +49,14 @@ hatch start            # run the daemon under the supervisor (also `npm start`)
 | [workflows](docs/system/workflows.md) | you need the workflow YAML, edges, runs or shipped workflows |
 | [agents](docs/system/agents.md) | you are touching the agent nodes, prompts or transcripts |
 | [names](docs/system/names.md) | you are changing the onboarding names list, the suggestion picker or name validation |
+| [ui](docs/system/ui.md) | you are touching the UI server, its API or its guard |
 | [restart and rollback](docs/system/restart-and-rollback.md) | you are touching the supervisor or a self-change merge |
 
 Update the docs this file names whenever you change what they describe.
 
 ## The daemon
 
-`hatch start` runs the daemon under a supervisor that restarts it after a merge that changed the hatchling's own code and reverts that merge if the new daemon is unhealthy. `npm run daemon` is the daemon alone and does not restart. The daemon loads `workflows/`, resumes interrupted runs, then claims queued items every 2 seconds. An invalid workflow file is printed to stderr and the daemon exits 1.
+`hatch start` runs the daemon under a supervisor that restarts it after a merge that changed the hatchling's own code and reverts that merge if the new daemon is unhealthy. `npm run daemon` is the daemon alone and does not restart. The daemon loads `workflows/`, resumes interrupted runs, then claims queued items every 2 seconds. An invalid workflow file is printed to stderr and the daemon exits 1. The daemon also serves the UI on 127.0.0.1 (see [ui](docs/system/ui.md)).
 
 ## Git layout
 

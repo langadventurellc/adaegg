@@ -194,6 +194,36 @@ describe("list, show, cancel, retry, status", () => {
     expect(r.out.endsWith(`daemon  up (pid ${process.pid})\n`)).toBe(true);
   });
 
+  it("shows the ui url after the daemon line when ready.json has one", async () => {
+    mkdirSync(state, { recursive: true });
+    writeFileSync(
+      join(state, "ready.json"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        head: "abc",
+        url: "http://127.0.0.1:4747",
+      }),
+    );
+    const r = await hatch(["status"]);
+    expect(r.out.endsWith(`daemon  up (pid ${process.pid})\nui  http://127.0.0.1:4747\n`)).toBe(true);
+  });
+
+  it("shows no ui line when the daemon is down, even if ready.json has a url", async () => {
+    mkdirSync(state, { recursive: true });
+    writeFileSync(
+      join(state, "ready.json"),
+      JSON.stringify({
+        pid: 2147483646,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        head: "abc",
+        url: "http://127.0.0.1:4747",
+      }),
+    );
+    const r = await hatch(["status"]);
+    expect(r.out.endsWith("daemon  down\n")).toBe(true);
+  });
+
   it("reports the daemon as down when ready.json names a dead pid", async () => {
     mkdirSync(state, { recursive: true });
     writeFileSync(

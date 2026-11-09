@@ -34,6 +34,8 @@ pnpm test        # Vitest from the root, including hatchling/**/*.test.ts
 pnpm build       # typecheck, then vite build into hatchling/dist
 ```
 
+`pnpm dev` serves only the template's front end from Vite, without the daemon, so API calls fail there.
+
 ## Conventions
 
 - ESM, strict TypeScript.
