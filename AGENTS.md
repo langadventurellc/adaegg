@@ -20,6 +20,8 @@ Later versions may add other agent providers, sharing or templates between hatch
 
 - The repository root is Ada Egg's own development repo (pnpm, Biome, Vitest).
 - `hatchling/` is the template that a setup command copies into a user's repo; it uses npm and has its own `biome.jsonc` and `tsconfig.json`.
+- `installer/` is the `adaegg init` source, compiled to `dist/installer` for publishing because Node does not strip types under `node_modules`.
+- `bin/adaegg.mjs` is the published `adaegg` entry; it imports the compiled `dist/installer/main.js`.
 - There is no pnpm workspace. Root devDependencies hold everything the template uses, and `tests/template-pin.test.ts` pins the template's versions to them.
 
 ## Commands
@@ -29,9 +31,9 @@ pnpm install
 pnpm dev         # Vite dev server for the template UI (hatchling/)
 pnpm lint        # Biome on the root, then on hatchling/ with its own config: lint, formatting and import order, warnings fail it; changes nothing
 pnpm format      # fix what Biome can fix automatically, in both
-pnpm typecheck   # tsc on hatchling/tsconfig.json
+pnpm typecheck   # tsc on hatchling/tsconfig.json; also covers installer/
 pnpm test        # Vitest from the root, including hatchling/**/*.test.ts
-pnpm build       # typecheck, then vite build into hatchling/dist
+pnpm build       # typecheck, then vite build into hatchling/dist; also compiles installer/ into dist/installer
 ```
 
 `pnpm dev` serves only the template's front end from Vite, without the daemon, so API calls fail there.

@@ -1,0 +1,67 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { InitError, type InitOptions } from "./init.ts";
+import { HELP, runCli } from "./main.ts";
+
+function setup() {
+  const out: string[] = [];
+  const err: string[] = [];
+  const calls: InitOptions[] = [];
+  const io = {
+    stdout: { write: (t: string) => out.push(t) },
+    stderr: { write: (t: string) => err.push(t) },
+    cwd: "/tmp",
+    env: {},
+  };
+  const fake = async (options: InitOptions) => {
+    calls.push(options);
+  };
+  return { io, out, err, calls, fake };
+}
+
+describe("runCli", () => {
+  it("prints help", async () => {
+    const s = setup();
+    expect(await runCli(["--help"], s.io, { runInit: s.fake })).toBe(0);
+    expect(s.out.join("")).toBe(HELP);
+  });
+
+  it.each([[[]], [["nope"]], [["init", "--nope"]], [["init", "a", "b"]]])("rejects %j", async (argv) => {
+    const s = setup();
+    expect(await runCli(argv, s.io, { runInit: s.fake })).toBe(1);
+    expect(s.err.join("")).toContain(HELP);
+    expect(s.err.join("")).toContain("adaegg: ");
+    expect(s.calls).toEqual([]);
+  });
+
+  it("defaults the folder to hatchling", async () => {
+    const s = setup();
+    expect(await runCli(["init"], s.io, { runInit: s.fake })).toBe(0);
+    expect(s.calls).toEqual([{ dir: "hatchling", skipCheck: false }]);
+  });
+
+  it("passes the folder and --skip-check", async () => {
+    const s = setup();
+    await runCli(["init", "mine", "--skip-check"], s.io, { runInit: s.fake });
+    expect(s.calls).toEqual([{ dir: "mine", skipCheck: true }]);
+  });
+
+  it("prints an InitError as adaegg: <message>", async () => {
+    const s = setup();
+    const code = await runCli(["init"], s.io, {
+      runInit: async () => {
+        throw new InitError("boom");
+      },
+    });
+    expect(code).toBe(1);
+    expect(s.err.join("")).toBe("adaegg: boom\n");
+  });
+
+  it("prints HELP when the module is executed directly", () => {
+    const out = execFileSync(process.execPath, [fileURLToPath(new URL("./main.ts", import.meta.url)), "--help"], {
+      encoding: "utf8",
+    });
+    expect(out).toBe(HELP);
+  });
+});
