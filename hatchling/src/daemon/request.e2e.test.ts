@@ -11,6 +11,9 @@ import { buildTemplateRepo, copyRepo, removeAllRepos, removeCopies, sh } from ".
 import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { addWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
 import { loadWorkflows } from "../engine/workflows/load.ts";
+import { handleApi } from "../server/api.ts";
+import type { RequestRow } from "../server/queue.ts";
+import { renderRequests } from "../ui/view.ts";
 import { createDaemon, type Daemon } from "./daemon.ts";
 
 const hatchlingRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -122,6 +125,31 @@ async function settle(daemon: Daemon) {
   throw new Error("timed out waiting");
 }
 
+// Stops when nothing runs and everything still queued waits behind a blocker.
+async function settleBlocked(daemon: Daemon) {
+  for (let i = 0; i < 1000; i++) {
+    await daemon.tick();
+    const items = listWorkItems(db);
+    if (
+      items.every((w) => w.status !== "in_progress") &&
+      items.every((w) => w.status !== "queued" || w.blockedBy.length > 0)
+    ) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error("timed out waiting");
+}
+
+// What the user sees in Ask: the request row from GET /api/state and its markup.
+function seen(requestId: string) {
+  const res = handleApi(db, { method: "GET", path: "/api/state", body: undefined });
+  const body = res.body as { queue: { requests: RequestRow[] } };
+  const row = body.queue.requests.find((r) => r.id === requestId);
+  if (!row) throw new Error("request row missing");
+  return { row, html: renderRequests(body.queue.requests) };
+}
+
 describe("request and verify workflows end to end", () => {
   it("plans a request into two chained items and a verification that passes", async () => {
     const calls: Call[] = [];
@@ -155,6 +183,71 @@ describe("request and verify workflows end to end", () => {
     expect(items.filter((w) => w.kind === "item")).toHaveLength(2);
     expect(items.filter((w) => w.kind === "verify")).toHaveLength(1);
     expect(sh(root, "status", "--porcelain")).toBe("");
+    const final = seen(request.id);
+    expect(final.row.delivery?.state).toBe("delivered");
+    expect(final.html).toContain("Delivered");
+  }, 60_000);
+
+  it("shows building, not Done, while the first step is still running", async () => {
+    let midFlight: ReturnType<typeof seen> | undefined;
+    let requestId = "";
+    const daemon = makeDaemon(
+      fakeQuery([], (call, nth, cwd) => {
+        if (call.role === "planner") return [planResult("two steps", [planItem("one"), planItem("two", ["one"])])];
+        if (call.role === "verifier") return [planResult("all delivered", [])];
+        if (call.role === "review") return [result({ structured_output: { verdict: "approve", findings: [] } })];
+        if (nth === 1) midFlight = seen(requestId);
+        commitFile(cwd, `impl-${nth}.txt`);
+        return [result()];
+      }),
+    );
+    requestId = addWorkItem(db, { title: "Build the thing", contents: "Please build the thing.", kind: "request" }).id;
+    await settle(daemon);
+
+    expect(getWorkItem(db, requestId).status).toBe("done");
+    expect(midFlight?.row.status).toBe("done");
+    expect(midFlight?.row.delivery?.state).toBe("building");
+    expect(midFlight?.html).not.toContain("Done");
+  }, 60_000);
+
+  it("needs attention when a step is blocked, and delivers after Retry", async () => {
+    let failImplementer = true;
+    const daemon = makeDaemon(
+      fakeQuery([], (call, nth, cwd) => {
+        if (call.role === "planner") return [planResult("two steps", [planItem("one"), planItem("two", ["one"])])];
+        if (call.role === "verifier") return [planResult("all delivered", [])];
+        if (call.role === "review") return [result({ structured_output: { verdict: "approve", findings: [] } })];
+        if (failImplementer) {
+          return [
+            { type: "assistant", error: "authentication_failed", message: { content: [] } },
+            result({ subtype: "success", is_error: true, result: "Invalid API key" }),
+          ];
+        }
+        commitFile(cwd, `impl-${nth}.txt`);
+        return [result()];
+      }),
+    );
+    const request = addWorkItem(db, { title: "Build the thing", contents: "Please build the thing.", kind: "request" });
+    await settleBlocked(daemon);
+
+    const steps = listWorkItems(db).filter((w) => w.kind === "item");
+    const first = steps[0];
+    const { row, html } = seen(request.id);
+    expect(row.delivery?.state).toBe("needs-attention");
+    expect(row.delivery?.attention?.id).toBe(first?.id);
+    expect(row.delivery?.attention?.action).toBe("retry");
+    expect(html).toContain(`data-action="retry" data-id="${first?.id}"`);
+    expect(first?.status).toBe("failed");
+    const others = listWorkItems(db).filter((w) => w.id !== request.id && w.id !== first?.id);
+    expect(others).toHaveLength(2);
+    expect(others.map((w) => w.status)).toEqual(["queued", "queued"]);
+
+    failImplementer = false;
+    const retry = handleApi(db, { method: "POST", path: `/api/items/${first?.id}/retry`, body: undefined });
+    expect(retry.status).toBe(200);
+    await settle(daemon);
+
+    expect(seen(request.id).row.delivery?.state).toBe("delivered");
   }, 60_000);
 
   it("builds the work the first verification found missing, then passes the second", async () => {
@@ -194,8 +287,15 @@ describe("request and verify workflows end to end", () => {
         return [result()];
       }),
     );
-    addWorkItem(db, { title: "Build the thing", contents: "Please build the thing.", kind: "request" });
+    const request = addWorkItem(db, { title: "Build the thing", contents: "Please build the thing.", kind: "request" });
     await settle(daemon);
+
+    const { row, html } = seen(request.id);
+    expect(row.delivery?.state).toBe("incomplete");
+    expect(row.delivery?.attention?.action).toBe("ask-again");
+    expect(html).toContain("Ask for the rest");
+    expect(html).not.toContain('data-action="retry"');
+    expect(getWorkItem(db, request.id).status).toBe("done");
 
     const verifies = listWorkItems(db).filter((w) => w.kind === "verify");
     expect(verifies.map((w) => w.status)).toEqual(["done", "failed"]);
