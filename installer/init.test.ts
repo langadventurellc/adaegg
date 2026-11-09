@@ -95,6 +95,7 @@ function setup(
     home,
     random: () => 0,
     runNode,
+    isPortFree: async () => true,
   };
   return { deps, env, cwd, home, calls, nodeCalls, order, out, text: () => out.join("") };
 }
@@ -118,6 +119,40 @@ describe("runInit", () => {
     for (const f of ["node_modules", "dist", ".adaegg"]) expect(existsSync(join(target, f)), f).toBe(false);
     expect(readFileSync(join(target, ".gitignore"), "utf8")).toBe(GITIGNORE);
     expect(GITIGNORE).toBe(readFileSync(join(templateDir, ".gitignore"), "utf8"));
+  });
+
+  it("writes the chosen port into adaegg.json and keeps the other keys", async () => {
+    const s = setup();
+    const tpl = tmp("adaegg-tpl-");
+    mkdirSync(join(tpl, "src", "names"), { recursive: true });
+    for (const f of ["names.ts", "suggest.ts", "validate.ts"]) {
+      writeFileSync(join(tpl, "src", "names", f), readFileSync(join(templateDir, "src", "names", f)));
+    }
+    writeFileSync(join(tpl, "adaegg.json"), '{"schema":1,"extra":"kept","ui":{"open":true}}');
+    const busy = new Set<number>();
+    const isPortFree = async (port: number) => !busy.has(port);
+    const deps = { ...s.deps, templateDir: tpl, isPortFree };
+    await runInit({ dir: "one", skipCheck: true }, deps);
+    const first = JSON.parse(readFileSync(join(s.cwd, "one", "adaegg.json"), "utf8"));
+    expect(first.schema).toBe(1);
+    expect(first.extra).toBe("kept");
+    expect(first.ui.open).toBe(true);
+    expect(Number.isInteger(first.ui.port)).toBe(true);
+    expect(first.ui.port).toBeGreaterThanOrEqual(4747);
+    expect(first.ui.port).toBeLessThanOrEqual(5746);
+    busy.add(first.ui.port);
+    await runInit({ dir: "two", skipCheck: true }, deps);
+    const second = JSON.parse(readFileSync(join(s.cwd, "two", "adaegg.json"), "utf8"));
+    expect(second.ui.port).not.toBe(first.ui.port);
+  });
+
+  it("fails as an InitError when no port is free", async () => {
+    const s = setup();
+    const err = await runInit({ dir: "mine", skipCheck: true }, { ...s.deps, isPortFree: async () => false }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(InitError);
+    expect((err as Error).message).toContain("no free port");
   });
 
   it("does not copy a template's node_modules, dist, .adaegg, lock or .git", async () => {

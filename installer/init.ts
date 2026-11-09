@@ -1,9 +1,10 @@
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Ask, chooseDir, chooseName, loadNames } from "./choices.ts";
+import { choosePort, portIsFree } from "./port.ts";
 
 export class InitError extends Error {}
 
@@ -38,6 +39,7 @@ export type InitDeps = {
   home?: string;
   random?: () => number;
   runNode?: RunNode;
+  isPortFree?: (port: number) => Promise<boolean>;
 };
 
 // Copies the template into `target` without build output, state or the template's own git data,
@@ -188,6 +190,12 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<num
   try {
     mkdirSync(target, { recursive: true });
     copyTemplate(templateDir, target);
+
+    const port = await choosePort(resolve(target), deps.isPortFree ?? portIsFree);
+    const configPath = join(target, "adaegg.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const existingUi = typeof config.ui === "object" && config.ui !== null ? config.ui : {};
+    writeFileSync(configPath, `${JSON.stringify({ ...config, ui: { ...existingUi, port } }, null, 2)}\n`);
 
     git(target, "init");
     git(target, "symbolic-ref", "HEAD", "refs/heads/main");

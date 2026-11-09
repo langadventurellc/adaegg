@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/langadventurellc/adaegg/main/instal
 
 It asks for a name and a folder, installs your hatchling there, starts it and opens your browser on `Ask <name>`. The install line works once the repository is public.
 
-To start it again later, run `cd <folder> && npm start`, or ask your coding agent to start it. You can run the install line again to hatch another one: each lives in its own folder and on its own port (4747, or a free port if that one is taken).
+To start it again later, run `cd <folder> && npm start`, or ask your coding agent to start it. You can run the install line again to hatch another one: each lives in its own folder and has its own fixed address, printed at the end of the install and by `hatch status`.
 
 The name you give is set during the install, so onboarding is skipped. A hatchling installed by an older version has no name yet, and its onboarding screen still asks for one (it suggests a name, never "Ada", and you may type anything). The screen is `Ask <name>` with some suggested starter requests. Pick one or write your own.
 

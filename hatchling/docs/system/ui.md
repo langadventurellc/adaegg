@@ -7,7 +7,7 @@ The daemon also serves a small local web server: a guarded JSON API and the brow
 In `adaegg.json`:
 
 - `ui.enabled`: default `true`. When `false` the daemon starts no server.
-- `ui.port`: default `4747`. `0` lets the OS pick a free port. When the port is taken, the server writes one line to stderr and listens on a free port instead, so two hatchlings on one machine both work.
+- `ui.port`: each hatchling gets its own `ui.port`, written into `adaegg.json` at install (chosen from 4747-5746, stable for the life of the hatchling). A hatchling made before this keeps the `4747` default. `0` lets the OS pick a free port. When the port is taken, the server writes one line to stderr (`ui: this hatchling's usual address (port N) is busy because another program is using it, so it is on a temporary address this time`) and listens on a free port instead. That address is temporary: the next start tries the configured port again.
 
 The server listens on `127.0.0.1` only. The daemon starts it after its first tick. Read the URL from the daemon's `hatchling UI: <url>` output, from `hatch status` (the `ui  <url>` line), or from `url` in `.adaegg/ready.json`. If the server fails to start, the daemon writes `daemon: UI failed to start: <message>` to stderr and carries on without a UI and without a `url`.
 
