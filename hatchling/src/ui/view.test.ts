@@ -10,10 +10,85 @@ import {
   RESTARTING_MESSAGE,
   renderAsk,
   renderBanner,
+  renderNotFound,
   renderOnboarding,
+  renderPageError,
+  renderPageHeader,
   renderRequests,
+  routeFor,
   screenFor,
 } from "./view.ts";
+
+const PAGE_LIST = [{ id: "tip" }, { id: "tip-calculator" }];
+
+describe("routeFor", () => {
+  it("gives the Ask screen for an empty hash", () => {
+    for (const hash of ["", "#", "#/", "/"]) expect(routeFor(hash, PAGE_LIST)).toEqual({ kind: "ask" });
+  });
+
+  it("gives a known page, with or without # and a trailing slash", () => {
+    for (const hash of ["#/tip", "/tip", "#/tip/"])
+      expect(routeFor(hash, PAGE_LIST)).toEqual({ kind: "page", id: "tip" });
+  });
+
+  it("gives not-found for anything else, keeping the raw remainder", () => {
+    expect(routeFor("#/nope", PAGE_LIST)).toEqual({ kind: "not-found", id: "nope" });
+    expect(routeFor("#/tip/extra", PAGE_LIST)).toEqual({ kind: "not-found", id: "tip/extra" });
+    expect(routeFor("#foo", PAGE_LIST)).toEqual({ kind: "not-found", id: "foo" });
+    expect(routeFor("#/<script>", PAGE_LIST)).toEqual({ kind: "not-found", id: "<script>" });
+    expect(routeFor("#/tip", [])).toEqual({ kind: "not-found", id: "tip" });
+  });
+
+  it("does not throw on malformed percent-encoding", () => {
+    expect(routeFor("#/%E0%A4%A", PAGE_LIST)).toEqual({ kind: "not-found", id: "%E0%A4%A" });
+  });
+});
+
+describe("page chrome", () => {
+  it("renderPageHeader links back to the Ask screen and escapes the name", () => {
+    const html = renderPageHeader("<b>&");
+    expect(html).toContain('href="#/"');
+    expect(html).toContain("Ask &lt;b&gt;&amp;");
+    expect(html).not.toContain("<b>");
+  });
+
+  it("renderNotFound says so and links back", () => {
+    const html = renderNotFound("Hopper");
+    expect(html).toContain('href="#/"');
+    expect(html).toContain("Ask Hopper");
+    expect(html).toContain("This page doesn&#39;t exist.");
+  });
+
+  it("renderNotFound escapes the name", () => {
+    expect(renderNotFound("<i>")).not.toContain("<i>");
+  });
+
+  it("renderPageError escapes the message", () => {
+    const html = renderPageError("<img src=x> & more");
+    expect(html).toContain("&lt;img src=x&gt; &amp; more");
+    expect(html).not.toContain("<img");
+  });
+});
+
+describe("renderAsk pages", () => {
+  const pages = [
+    { id: "tip", title: "Tip calculator" },
+    { id: "notes", title: '<b>&"' },
+  ];
+
+  it("lists one link per page with escaped titles, before Your requests", () => {
+    const html = renderAsk({ name: "Hopper", starters: [], pages });
+    expect(html).toContain('<a href="#/tip">Tip calculator</a>');
+    expect(html).toContain('<a href="#/notes">&lt;b&gt;&amp;&quot;</a>');
+    expect(html).toContain("Your pages");
+    expect(html.indexOf("Your pages")).toBeLessThan(html.indexOf("Your requests"));
+  });
+
+  it("renders no section with no pages", () => {
+    expect(renderAsk({ name: "Hopper", starters: [], pages: [] })).not.toContain("Your pages");
+    expect(renderAsk({ name: "Hopper", starters: [] })).not.toContain("Your pages");
+  });
+});
 
 function row(over: Partial<RequestRow> = {}): RequestRow {
   return {

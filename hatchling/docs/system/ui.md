@@ -58,14 +58,24 @@ The page is plain TypeScript with no framework, in `src/ui/`:
 - Ask: `Ask <name>` with a textarea, three starter requests (buttons that fill the textarea and never submit) and the "Your requests" list. Asking posts to `/api/ask`. Each request shows its `delivery` state (Building, Checking the result, Delivered, Needs attention, Incomplete) instead of Done. A row that needs attention names the failing step and has Retry on that step; an incomplete row has "Ask for the rest", which fills the textarea and never submits, and no Retry. Failed or cancelled requests have Retry, and queued rows have Cancel.
 - While the server is unreachable (for example during the restart after a self-change) a "restarting" banner shows above the current screen and polling continues. The page never reloads itself; Vite's client does that when the daemon comes back.
 
-The browser tab title is `Ask <name>` on the ask screen and `Ada Egg` (the product name) during onboarding.
+The browser tab title is `Ask <name>` on the ask screen (and on the not-found message), the page's title on a page, and `Ada Egg` (the product name) during onboarding.
+
+## Pages
+
+Software built for the user lives in pages. The registry is `PAGES` in `src/ui/pages/index.ts`, a list of `{ id, title, render }` (empty in the template). `id` is the URL slug (lowercase kebab-case) and `render(root)` draws into `root` and may return a cleanup function. Each page lives in its own folder `src/ui/pages/<id>/`, with its pure logic in a tested module.
+
+- Routes are by hash, parsed by `routeFor` in `view.ts`: `#/` (or empty) is the Ask screen, `#/<id>` is that page under a small header linking back to `Ask <name>`. An unknown id shows "This page doesn't exist." with the same link.
+- Onboarding wins: while no name is set (or during a rename) onboarding shows whatever the hash is.
+- The Ask screen lists the pages in a "Your pages" section above "Your requests", one link per page by title. With no pages the section is not shown.
+- Polling on a page refreshes only the banner, never the page. A page whose `render` throws shows the error text instead, and the shell keeps working.
 
 ## Files
 
 | File | Role |
 | --- | --- |
 | `src/ui/main.ts` | The thin DOM shell: loads state, renders, delegates `data-action` clicks and form submits on `#app`, polls. |
-| `src/ui/view.ts` | Pure rendering to HTML strings (`renderOnboarding`, `renderAsk`, `renderRequests`, `renderBanner`), `describeDelivery` (the label for a delivery state) and `screenFor`. |
+| `src/ui/view.ts` | Pure rendering to HTML strings (`renderOnboarding`, `renderAsk`, `renderRequests`, `renderBanner`, `renderPageHeader`, `renderNotFound`, `renderPageError`), `describeDelivery` (the label for a delivery state), `screenFor` and `routeFor` (hash to route). |
+| `src/ui/pages/index.ts` | The page registry `PAGES`, the `Page` type and `isPageId`. |
 | `src/ui/state.ts` | Pure screen-state transitions, with the random source injected. |
 | `src/ui/client.ts` | The typed API client (`ApiError`, `UnreachableError`). |
 | `src/ui/starters.ts` | `STARTER_REQUESTS` and `pickStarters`. |
