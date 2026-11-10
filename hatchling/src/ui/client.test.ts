@@ -70,6 +70,26 @@ describe("createClient against the real server", () => {
     expect(err.status).toBe(409);
   });
 
+  it("continue posts {} to the continue route and returns the id and title", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fake = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: "new1", title: "Finish: x" }), { status: 201 });
+    }) as unknown as typeof fetch;
+    const res = await createClient("http://h", fake).continue("abcd 1234");
+    expect(res).toEqual({ id: "new1", title: "Finish: x" });
+    expect(calls[0]?.url).toBe("http://h/api/items/abcd%201234/continue");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.init?.body).toBe("{}");
+  });
+
+  it("continue on a request that is not incomplete throws ApiError 409", async () => {
+    const item = addWorkItem(db, { title: "x", kind: "request" });
+    const err = await client.continue(item.id).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+  });
+
   it("pageData sets, gets, lists, overwrites and removes", async () => {
     const water = client.pageData("water");
     expect(await water.get("today")).toBeUndefined();

@@ -207,9 +207,18 @@ describe("delivery rows", () => {
     ]);
     expect(html).toContain("The request may still be missing work. gave up");
     expect(html).not.toContain('data-action="retry"');
-    expect(html).toContain(
-      'class="starter" data-action="starter" data-text="Finish the work still missing from: A &quot;quoted&quot; &lt;b&gt;">Ask for the rest</button>',
-    );
+    expect(html).toContain(`<button type="button" data-action="continue" data-id="${rid}">Ask for the rest</button>`);
+    expect(html).not.toContain("data-text");
+    expect(html).not.toContain("starter");
+  });
+
+  it("keeps a long row title out of the Ask for the rest button", () => {
+    const title = "T".repeat(200);
+    const attention = { id: stepId, title: "Check", error: "gave up", action: "ask-again" as const };
+    const html = renderRequests([row({ title, status: "done", delivery: d("incomplete", attention) })]);
+    const button = html.slice(html.indexOf("<button"), html.indexOf("</button>"));
+    expect(button).toContain('data-action="continue"');
+    expect(button).not.toContain("TTTT");
   });
 
   it("shows only the error for a failed request and omits an empty one", () => {

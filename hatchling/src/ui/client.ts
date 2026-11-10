@@ -66,6 +66,8 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     ask: (text: string) => call<{ id: string; title: string }>("POST", "/api/ask", { text }),
     retry: (id: string) => item(id, "retry"),
     cancel: (id: string) => item(id, "cancel"),
+    continue: (id: string) =>
+      call<{ id: string; title: string }>("POST", `/api/items/${encodeURIComponent(id)}/continue`, {}),
   };
 }
 
