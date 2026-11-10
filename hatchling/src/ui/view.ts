@@ -105,10 +105,7 @@ function renderDeliveryRow(row: RequestRow, delivery: Delivery): string {
     if (attention.action === "retry") {
       parts.push(`<button type="button" data-action="retry" data-id="${escapeHtml(attention.id)}">Retry</button>`);
     } else {
-      const text = `Finish the work still missing from: ${row.title}`;
-      parts.push(
-        `<button type="button" class="starter" data-action="starter" data-text="${escapeHtml(text)}">Ask for the rest</button>`,
-      );
+      parts.push(`<button type="button" data-action="continue" data-id="${id}">Ask for the rest</button>`);
     }
   }
   if (row.status === "queued") {

@@ -287,7 +287,12 @@ describe("request and verify workflows end to end", () => {
         return [result()];
       }),
     );
-    const request = addWorkItem(db, { title: "Build the thing", contents: "Please build the thing.", kind: "request" });
+    const requirement = "It must also keep a history of every change.";
+    const request = addWorkItem(db, {
+      title: "Build the thing",
+      contents: `Build the thing.\nIt must have a big red button.\n${requirement}`,
+      kind: "request",
+    });
     await settle(daemon);
 
     const { row, html } = seen(request.id);
@@ -303,5 +308,29 @@ describe("request and verify workflows end to end", () => {
     expect(calls.filter((c) => c.role === "verifier")).toHaveLength(2);
     expect(listWorkItems(db).filter((w) => w.status === "queued")).toEqual([]);
     expect(listWorkItems(db).filter((w) => w.kind === "verify")).toHaveLength(2);
+
+    expect(html).toContain('data-action="continue"');
+    expect(html).toContain(`data-id="${request.id}"`);
+    const doneSteps = listWorkItems(db)
+      .filter((w) => w.kind === "item" && w.status === "done")
+      .map((w) => w.title);
+    expect(doneSteps).toEqual(["Step one", "Step two", "Step more-1"]);
+
+    const res = handleApi(db, { method: "POST", path: `/api/items/${request.id}/continue`, body: undefined });
+    expect(res.status).toBe(201);
+    const created = getWorkItem(db, (res.body as { id: string }).id);
+    const contents = created.contents ?? "";
+    expect(contents).toContain(requirement);
+    const built = contents.slice(contents.indexOf("## Already built"), contents.indexOf("## Still missing"));
+    expect(built).toContain("Step one");
+    expect(built).toContain("Step more-1");
+    expect(contents.slice(contents.indexOf("## Still missing"))).toContain("Step more-2");
+
+    await settle(daemon);
+    const planners = calls.filter((c) => c.role === "planner");
+    const lastPlan = planners[planners.length - 1];
+    expect(planners).toHaveLength(2);
+    expect(lastPlan?.prompt).toContain(requirement);
+    expect(lastPlan?.prompt).toContain("Step more-2");
   }, 60_000);
 });

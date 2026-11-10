@@ -239,7 +239,7 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
   });
 }
 
-async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel"): Promise<void> {
+async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel" | "continue"): Promise<void> {
   const id = button.dataset.id;
   if (!id) return;
   await withDisabled(button, () => runAction(() => client[action](id)));
@@ -271,6 +271,7 @@ app?.addEventListener("click", (event) => {
     }
     case "retry":
     case "cancel":
+    case "continue":
       void itemAction(button, button.dataset.action);
       break;
   }

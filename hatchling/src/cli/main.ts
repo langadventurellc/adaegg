@@ -20,6 +20,7 @@ import {
   type WorkItem,
 } from "../engine/store.ts";
 import { validateName } from "../names/validate.ts";
+import { continueRequest } from "../server/continue.ts";
 import { deliveryOf, progressOf } from "../server/queue.ts";
 import { runSupervisor } from "../supervisor/supervisor.ts";
 
@@ -80,6 +81,7 @@ Commands:
   runs [--limit n]      List the newest runs (default 20).
   cancel <id>           Cancel a queued item.
   retry <id>            Queue a failed or cancelled item again.
+  continue <id>         Queue a new request for the missing work of an incomplete request.
   status                Count items per status, say whether the supervisor and the
                         daemon are up and show the UI url when it is.
   name [<name>]         Show the hatchling's name, or set it.
@@ -428,6 +430,19 @@ async function runCommand(command: string, args: string[], io: CliIo): Promise<v
       }
       return;
     }
+    case "continue": {
+      const { values, positionals } = parse(args, {});
+      if (values.help) return void out(HELP);
+      const ref = requireOne(positionals, "id");
+      const db = openDb(dbPath(findRepoRoot(io.cwd), env));
+      try {
+        const item = continueRequest(db, ref);
+        out(`queued ${short(item.id)} ${item.title}\n`);
+      } finally {
+        db.close();
+      }
+      return;
+    }
     case "cancel":
     case "retry": {
       const { values, positionals } = parse(args, {});
@@ -627,7 +642,19 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   }
 }
 
-export const COMMANDS = ["add", "list", "show", "runs", "cancel", "retry", "status", "name", "start", "stop"];
+export const COMMANDS = [
+  "add",
+  "list",
+  "show",
+  "runs",
+  "cancel",
+  "retry",
+  "continue",
+  "status",
+  "name",
+  "start",
+  "stop",
+];
 
 function isCommand(name: string): boolean {
   return COMMANDS.includes(name);

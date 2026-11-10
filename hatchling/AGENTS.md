@@ -46,6 +46,7 @@ hatch show <id> [--json]   # also lists the item's runs and node runs
 hatch runs [--limit n]     # newest runs first (default 20)
 hatch cancel <id>      # queued items only
 hatch retry <id>       # failed or cancelled items only
+hatch continue <id>    # incomplete requests only: queue a new request with the original text, what was built and what was missing
 hatch status           # count per status, then `supervisor  up (pid n)` when a supervisor is running, `daemon  up (pid n)` or `daemon  down`, then `ui  <url>` when the UI is up
 hatch name [<name>]    # show the name the UI uses, or set it
 hatch start [--detach] [--open]   # run the daemon under the supervisor; --detach runs it in the background (log: .adaegg/logs/supervisor.log) and returns once it is up; --open opens the browser; `npm start` is `hatch start --open`
