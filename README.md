@@ -93,7 +93,7 @@ npm run hatch -- start --detach
 npm run hatch -- stop
 ```
 
-The hatchling's [AGENTS.md](hatchling/AGENTS.md) is written for LLM agents, such as an outside coding agent you point at your repo. Its guides and system docs are in [hatchling/docs/](hatchling/docs/system/queue.md).
+The hatchling's [AGENTS.md](hatchling/AGENTS.md) is written for LLM agents, such as an outside coding agent you point at your repo. Its guides and system docs are in [hatchling/docs/](hatchling/docs/).
 
 ## Developing Ada Egg itself
 

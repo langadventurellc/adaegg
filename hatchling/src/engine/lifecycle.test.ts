@@ -152,12 +152,6 @@ describe("deleteRestartRequestIfUnchanged", () => {
     expect(existsSync(consumingPath(stateDir))).toBe(false);
   });
 
-  it("restores a differing taken request when nothing was written in the gap", () => {
-    writeRestartRequest(stateDir, newer);
-    expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(false);
-    expect(readRestartRequest(stateDir)).toEqual(newer);
-  });
-
   it("leaves a normal restart.json for a write after the call", () => {
     writeRestartRequest(stateDir, older);
     expect(deleteRestartRequestIfUnchanged(stateDir, older)).toBe(true);

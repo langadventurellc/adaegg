@@ -143,7 +143,7 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<num
     suggestion: names.suggest(deps.random),
     validate: names.validate,
   });
-  const chosen = await chooseDir({
+  const target = await chooseDir({
     dir: options.dir,
     name,
     cwd: deps.cwd,
@@ -153,7 +153,6 @@ export async function runInit(options: InitOptions, deps: InitDeps): Promise<num
     out: (text) => deps.stdout.write(`${text}\n`),
   });
   deps.closeInput?.();
-  const target = chosen.dir;
   let probe = target;
   try {
     if (existsSync(target)) {

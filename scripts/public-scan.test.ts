@@ -63,6 +63,14 @@ describe("scanText", () => {
     }
   });
 
+  it("matches private IPs only at a word start", () => {
+    for (const ipText of [ip(10, 1, 2, 3), ip(172, 16, 0, 1), ip(192, 168, 1, 5), ip(100, 64, 0, 1)]) {
+      expect(scanText(`v${ipText}`, "x")).toEqual([]);
+      expect(scanText(`_${ipText}`, "x")).toEqual([]);
+      expect(scanText(`at ${ipText}`, "x").map((f) => f.rule)).toEqual(["private-ip"]);
+    }
+  });
+
   it("allows placeholder home paths", () => {
     for (const name of ["you", "user", "username", "name"]) {
       expect(scanText(`${linuxHome}${name}/x`, "x")).toEqual([]);
@@ -144,14 +152,6 @@ describe("scanHistory", () => {
       .filter((f) => f.rule === "anthropic-key" && f.source.startsWith(second))
       .map((f) => f.source);
     expect(sources.sort()).toEqual([`${second} 0-first.txt`, `${second} z-last.txt`]);
-  });
-
-  it("matches private IPs only at a word start", () => {
-    for (const ipText of [ip(10, 1, 2, 3), ip(172, 16, 0, 1), ip(192, 168, 1, 5), ip(100, 64, 0, 1)]) {
-      expect(scanText(`v${ipText}`, "x")).toEqual([]);
-      expect(scanText(`_${ipText}`, "x")).toEqual([]);
-      expect(scanText(`at ${ipText}`, "x").map((f) => f.rule)).toEqual(["private-ip"]);
-    }
   });
 
   it("is clean for a clean repo and for an empty one", () => {
