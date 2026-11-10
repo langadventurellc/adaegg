@@ -191,6 +191,22 @@ describe("list, show, cancel, retry, status", () => {
     expect((await hatch(["retry", a])).out).toBe(`queued ${a}\n`);
   });
 
+  it("continues an incomplete request and refuses any other", async () => {
+    const req = await add(["Req", "--kind", "request"]);
+    expectOneLineError(await hatch(["continue", req]), /^hatch: cannot continue /);
+    const db = openDb(join(state, "hatch.db"));
+    const parent = db.prepare("SELECT id FROM work_items WHERE id LIKE ?").get(`${req}%`) as { id: string };
+    db.prepare("UPDATE work_items SET status = 'done' WHERE id = ?").run(parent.id);
+    db.prepare(
+      "INSERT INTO work_items (id, title, contents, kind, status, parent_id, error, created_at, updated_at) VALUES ('verify-1', 'v', '', 'verify', 'failed', ?, 'the request still has missing work after 2 verification rounds (maxVerifyRounds). The verifier wanted: \"More\".', datetime('now'), datetime('now'))",
+    ).run(parent.id);
+    db.close();
+    const r = await hatch(["continue", req]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^queued \w{8} Finish: Req\n$/);
+    expectOneLineError(await hatch(["continue", req]), /already continued/);
+  });
+
   it("counts every status including zeros", async () => {
     const a = await add(["A"]);
     await add(["B"]);
