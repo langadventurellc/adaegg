@@ -1,8 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { PLAN_JSON_SCHEMA } from "../plan.ts";
+import { loadWorkflows } from "../workflows/load.ts";
 import { AUTH_PROBLEM, buildPrompt, createAgentNode, createReviewNode, type QueryFn } from "./agent.ts";
+import { builtinNodeTypes } from "./index.ts";
 import { buildTemplateRepo, copyRepo, makeCtx, makeWorkItem, removeAllRepos, removeCopies, sh } from "./test-repo.ts";
 import { type RunState, RunStateSchema } from "./types.ts";
 
@@ -171,6 +174,65 @@ describe("agent node options", () => {
   it("rejects a model that is not implement or review", () => {
     const node = createAgentNode({ query: fake([]) });
     expect(() => parse(node, { ...agentConfig, model: "gpt" })).toThrow();
+  });
+});
+
+describe("shipped workflows approve only the documented shell commands", () => {
+  const hatchlingRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const workflows = loadWorkflows(join(hatchlingRoot, "workflows"), builtinNodeTypes);
+
+  async function optionsFor(node: { type: string; config?: unknown }): Promise<Record<string, unknown>> {
+    const { ctx } = setup();
+    const captured: Captured = {};
+    const query = fake([success()], captured);
+    const factory = node.type === "review" ? createReviewNode({ query }) : createAgentNode({ query });
+    const config = { ...(node.config as object), prompt: "prompts/implement.md" };
+    await runAgent(ctx, query, config, factory);
+    return captured.options as Record<string, unknown>;
+  }
+
+  const agentNodes = workflows.flatMap((w) =>
+    w.nodes.filter((n) => n.type === "agent" || n.type === "review").map((n) => ({ w, n, name: `${w.id}/${n.id}` })),
+  );
+
+  it("covers the implement, review, request and verify agent nodes", () => {
+    const names = agentNodes.map((a) => a.name);
+    expect(names).toEqual(expect.arrayContaining(["implement/implement", "implement/review"]));
+    expect(agentNodes.some((a) => a.w.id === "request")).toBe(true);
+    expect(agentNodes.some((a) => a.w.id === "verify")).toBe(true);
+  });
+
+  for (const { n, name } of agentNodes) {
+    it(`${name} approves no bare Bash`, async () => {
+      const o = await optionsFor(n);
+      const allowed = o.allowedTools as string[];
+      expect(allowed).not.toContain("Bash");
+      expect(allowed).not.toContain("Bash(*)");
+    });
+  }
+
+  it("limits the implement node to the documented commands and denies push and remotes", async () => {
+    const node = workflows.find((w) => w.id === "implement")?.nodes.find((n) => n.id === "implement");
+    const o = await optionsFor(node as never);
+    const bash = (o.allowedTools as string[]).filter((t) => t.startsWith("Bash"));
+    expect(bash).toEqual([
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(bin/hatch *)",
+    ]);
+    expect(o.disallowedTools).toEqual(expect.arrayContaining(["Bash(git push*)", "Bash(git remote*)"]));
+    expect(o.permissionMode).toBe("dontAsk");
+  });
+
+  it("passes tools through unchanged, so a bare Bash in a config would be approved", async () => {
+    const { ctx } = setup();
+    const captured: Captured = {};
+    await runAgent(ctx, fake([success()], captured), { ...agentConfig, tools: ["Read", "Bash"] });
+    expect((captured.options as Record<string, unknown>).allowedTools).toContain("Bash");
   });
 });
 
