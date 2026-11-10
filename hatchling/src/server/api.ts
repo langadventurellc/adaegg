@@ -3,6 +3,7 @@ import { deletePageData, isPageDataId, listPageData, setPageData } from "../engi
 import { getSetting, setSetting } from "../engine/settings.ts";
 import { addWorkItem, cancelWorkItem, getWorkItem, listWorkItems, retryWorkItem } from "../engine/store.ts";
 import { validateName } from "../names/validate.ts";
+import { continueRequest } from "./continue.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 import { type QueueSummary, summarizeQueue, titleFromText } from "./queue.ts";
 
@@ -27,7 +28,7 @@ function stringField(body: unknown, field: string): string | ApiResponse {
   return value;
 }
 
-function transitionItem(db: DatabaseSync, rawId: string, action: "retry" | "cancel"): ApiResponse {
+function transitionItem(db: DatabaseSync, rawId: string, action: "retry" | "cancel" | "continue"): ApiResponse {
   let id: string;
   try {
     id = decodeURIComponent(rawId);
@@ -35,6 +36,10 @@ function transitionItem(db: DatabaseSync, rawId: string, action: "retry" | "canc
     return fail(400, "malformed id");
   }
   try {
+    if (action === "continue") {
+      const created = continueRequest(db, id);
+      return { status: 201, body: { id: created.id, title: created.title } };
+    }
     const item = getWorkItem(db, id);
     const changed = action === "retry" ? retryWorkItem(db, item.id) : cancelWorkItem(db, item.id);
     return { status: 200, body: { id: changed.id, status: changed.status } };
@@ -85,7 +90,7 @@ function pageData(
 
 export function handleApi(db: DatabaseSync, req: ApiRequest): ApiResponse {
   const { method, path } = req;
-  const item = /^\/api\/items\/([^/]+)\/(retry|cancel)$/.exec(path);
+  const item = /^\/api\/items\/([^/]+)\/(retry|cancel|continue)$/.exec(path);
   const dataList = /^\/api\/pages\/([^/]+)\/data$/.exec(path);
   const dataSet = /^\/api\/pages\/([^/]+)\/data\/([^/]+)$/.exec(path);
   const dataDelete = /^\/api\/pages\/([^/]+)\/data\/([^/]+)\/delete$/.exec(path);
@@ -102,7 +107,7 @@ export function handleApi(db: DatabaseSync, req: ApiRequest): ApiResponse {
   if (path === "/api/state") {
     return { status: 200, body: { name: getSetting(db, "name"), queue: summarizeQueue(listWorkItems(db)) } };
   }
-  if (item) return transitionItem(db, item[1] as string, item[2] as "retry" | "cancel");
+  if (item) return transitionItem(db, item[1] as string, item[2] as "retry" | "cancel" | "continue");
   if (path === "/api/name") {
     const raw = stringField(req.body, "name");
     if (typeof raw !== "string") return raw;

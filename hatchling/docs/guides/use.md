@@ -94,7 +94,7 @@ In `hatch list` and `hatch show`, a request shows its delivery state after its s
 
 To stop a hatchling from another terminal, run `hatch stop`: it signals the supervisor, waits until the supervisor and the daemon have exited, then prints `stopped`, and never reverts a merge, even during probation; interrupted runs resume on the next start.
 
-In Ask, a request is "Delivered" only when every step and the verification are done. "Needs attention" means a step failed: press Retry on the step it names. "Incomplete" means the verification gave up with work still missing: use "Ask for the rest" (it fills the textarea for you to edit and send), or look with `hatch show <id>`.
+In Ask, a request is "Delivered" only when every step and the verification are done. "Needs attention" means a step failed: press Retry on the step it names. "Incomplete" means the verification gave up with work still missing: use "Ask for the rest" (it sends a new request at once, holding your original request, what was built and what was still missing; `hatch continue <id>` does the same from the terminal), or look with `hatch show <id>`.
 
 ## Cancel and retry
 
