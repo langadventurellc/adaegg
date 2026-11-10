@@ -91,6 +91,12 @@ function trackChild<T extends ChildProcess>(child: T): T {
   return child;
 }
 
+function closedOf(child: ChildProcess): Promise<void> {
+  const entry = children.find((c) => c.child === child);
+  if (!entry) throw new Error("child was not tracked");
+  return entry.closed;
+}
+
 function runSupervisor(deps: SupervisorDeps): Promise<number> {
   let stop = () => {};
   const done = runSupervisorImpl({
@@ -783,11 +789,10 @@ describe("rollback", () => {
     const child = trackChild(
       nodeSpawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }),
     );
-    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
     const pid = child.pid as number;
     expect(running(pid)).toBe(true);
     child.kill("SIGKILL");
-    await closed;
+    await closedOf(child);
     expect(running(pid)).toBe(false);
   });
 
@@ -797,10 +802,11 @@ describe("rollback", () => {
     const marker = `${pidFile}.first`;
     sleeperPidFiles.push(pidFile);
     const readPid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim().split(/\s+/)[1]) : 0);
+    const readShellPid = () => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim().split(/\s+/)[0]) : 0);
     const quote = (path: string) => `'${path.replaceAll("'", "'\\''")}'`;
     const hang = `sleep 30 & echo "$$ $!" > ${quote(pidFile)}; wait`;
     const command = passFirst ? `if [ -e ${quote(marker)} ]; then ${hang}; else touch ${quote(marker)}; fi` : hang;
-    return { command, readPid };
+    return { command, readPid, readShellPid };
   };
 
   it("cleans up a setup and daemon left running when a test ends early", async () => {
@@ -813,7 +819,7 @@ describe("rollback", () => {
     const setupDone = runSupervisor(setup.deps);
     await waitFor(() => sleeper.readPid() > 0, "the setup's child to start");
     const pid = sleeper.readPid();
-    const shellPid = Number(readFileSync(sleeperPidFiles[0] as string, "utf8").split(/\s+/)[0]);
+    const shellPid = sleeper.readShellPid();
     expect(running(pid)).toBe(true);
     expect(running(shellPid)).toBe(true);
     // No test-side signal: the same cleanup used by afterEach must stop everything.

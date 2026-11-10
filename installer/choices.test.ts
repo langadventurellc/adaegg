@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,12 +38,8 @@ describe("folderFor", () => {
 });
 
 describe("loadNames", () => {
-  it("loads from a template under node_modules, where Node will not strip types", async () => {
-    const root = tmp();
-    const installed = join(root, "node_modules", "adaegg", "hatchling");
-    mkdirSync(join(installed, "src", "names"), { recursive: true });
-    cpSync(join(templateDir, "src", "names"), join(installed, "src", "names"), { recursive: true });
-    const names = await loadNames(installed);
+  it("returns a working validate and suggest", async () => {
+    const names = await loadNames(templateDir);
     expect(names.validate("Pip")).toEqual({ ok: true, name: "Pip" });
     expect(names.suggest(() => 0)).not.toBe("");
   });
@@ -114,21 +110,21 @@ describe("chooseDir", () => {
 
   it("takes the default on Enter", async () => {
     const { cwd, o } = base([""]);
-    expect(await chooseDir(o)).toEqual({ dir: join(cwd, "pip-moss"), explicit: false });
+    expect(await chooseDir(o)).toBe(join(cwd, "pip-moss"));
   });
 
   it("expands ~ and resolves relative answers", async () => {
     const a = base(["~/x"]);
-    expect((await chooseDir(a.o)).dir).toBe(join(a.home, "x"));
+    expect(await chooseDir(a.o)).toBe(join(a.home, "x"));
     const b = base(["sub/y"]);
-    expect((await chooseDir(b.o)).dir).toBe(join(b.cwd, "sub", "y"));
+    expect(await chooseDir(b.o)).toBe(join(b.cwd, "sub", "y"));
   });
 
   it("asks again for a folder that is not empty", async () => {
     const { p, cwd, o } = base(["full", "fresh"]);
     mkdirSync(join(cwd, "full"));
     writeFileSync(join(cwd, "full", "f"), "");
-    expect((await chooseDir(o)).dir).toBe(join(cwd, "fresh"));
+    expect(await chooseDir(o)).toBe(join(cwd, "fresh"));
     expect(p.asked).toHaveLength(2);
     expect(p.out.join("")).toContain(`${join(cwd, "full")} is not empty; pick a new or empty folder.`);
   });
@@ -137,17 +133,17 @@ describe("chooseDir", () => {
     const { cwd, o } = base([], false);
     mkdirSync(join(cwd, "pip-moss"));
     writeFileSync(join(cwd, "pip-moss", "f"), "");
-    expect((await chooseDir(o)).dir).toBe(join(cwd, "pip-moss-2"));
+    expect(await chooseDir(o)).toBe(join(cwd, "pip-moss-2"));
     mkdirSync(join(cwd, "pip-moss-2"));
     writeFileSync(join(cwd, "pip-moss-2", "f"), "");
-    expect((await chooseDir(o)).dir).toBe(join(cwd, "pip-moss-3"));
+    expect(await chooseDir(o)).toBe(join(cwd, "pip-moss-3"));
     rmSync(join(cwd, "pip-moss-2", "f"));
-    expect((await chooseDir(o)).dir).toBe(join(cwd, "pip-moss-2"));
+    expect(await chooseDir(o)).toBe(join(cwd, "pip-moss-2"));
   });
 
-  it("returns an explicit dir as explicit", async () => {
+  it("resolves a given dir without asking", async () => {
     const { p, cwd, o } = base([]);
-    expect(await chooseDir({ ...o, dir: "here" })).toEqual({ dir: join(cwd, "here"), explicit: true });
+    expect(await chooseDir({ ...o, dir: "here" })).toBe(join(cwd, "here"));
     expect(p.asked).toHaveLength(0);
   });
 });

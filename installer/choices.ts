@@ -79,18 +79,18 @@ export async function chooseDir(o: {
   interactive: boolean;
   ask: Ask;
   out: (text: string) => void;
-}): Promise<{ dir: string; explicit: boolean }> {
-  if (o.dir !== undefined) return { dir: expand(o.dir, o.cwd, o.home), explicit: true };
+}): Promise<string> {
+  if (o.dir !== undefined) return expand(o.dir, o.cwd, o.home);
   const base = join(o.cwd, folderFor(o.name));
   if (!o.interactive) {
     let candidate = base;
     for (let n = 2; !isFreeFolder(candidate); n++) candidate = `${base}-${n}`;
-    return { dir: candidate, explicit: false };
+    return candidate;
   }
   for (;;) {
     const answer = (await o.ask(`Where should ${o.name} live? [${base}]: `)).trim();
     const dir = answer === "" ? base : expand(answer, o.cwd, o.home);
-    if (isFreeFolder(dir)) return { dir, explicit: false };
+    if (isFreeFolder(dir)) return dir;
     o.out(`${dir} is not empty; pick a new or empty folder.\n`);
   }
 }
