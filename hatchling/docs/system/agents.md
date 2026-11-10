@@ -33,6 +33,10 @@ The SDK is called with `cwd` set to the run's worktree, or to the repo root with
 
 `allowedTools` only auto-approves; it does not restrict. A tool that is not listed would fall through to a permission prompt, and nobody answers a prompt in a daemon: the run would hang. So the node sets `permissionMode: 'dontAsk'`, which denies anything not pre-approved. The `deny` rules are scoped and apply in every mode. `bypassPermissions` is never used.
 
+A bare `Bash` in `tools` approves every command and so defeats the `bash` patterns. The shipped workflows therefore list only `bash` patterns, never `Bash` in `tools` (the Bash tool is still available; the patterns approve matching commands). The shipped implement workflow has no `rm` or `mv`, so agents use `git rm` and `git mv`.
+
+A pattern list is a gate on the commands Claude writes, not a security boundary or a sandbox (see <https://code.claude.com/docs/en/permissions>). Compound commands are split on `&&`, `||`, `;`, `|`, `|&`, `&` and newlines, and each part must match an allow rule. Wrappers such as `timeout` and `nice` are stripped before matching. Deny rules cover the usual forms of a command, not every way to invoke it (`git -C . push` may not match `Bash(git push*)`). Allowed programs such as `node` can run arbitrary code with the user's permissions.
+
 ## Environment and chaining
 
 `env` replaces the subprocess environment, so the node passes `{ ...process.env, ADAEGG_STATE_DIR: <absolute state dir> }` and nothing else is added or removed. `ADAEGG_STATE_DIR` makes `bin/hatch` run by the agent inside its worktree use the main queue, not a copy in the worktree. An agent chains follow-up work with `bin/hatch add "<title>" --file <spec> --blocked-by <this item's id>`.

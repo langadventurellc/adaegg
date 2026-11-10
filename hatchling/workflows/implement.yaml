@@ -10,7 +10,7 @@ nodes:
       model: implement
       prompt: prompts/implement.md
       commit: true
-      tools: [Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch]
+      tools: [Read, Write, Edit, Glob, Grep, WebFetch, WebSearch]
       bash: ["npm *", "npx *", "node *", "git *", "ls *", "mkdir *", "bin/hatch *"]
       deny: ["Bash(git push*)", "Bash(git remote*)"]
       maxTurns: 150
