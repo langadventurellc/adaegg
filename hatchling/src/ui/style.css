@@ -187,7 +187,8 @@ button:disabled {
 }
 
 .request[data-status="delivered"] .status,
-.request[data-status="cancelled"] .status {
+.request[data-status="cancelled"] .status,
+.request[data-status="continued"] .status {
   font-weight: 400;
   border-color: GrayText;
   color: GrayText;
@@ -197,9 +198,21 @@ button:disabled {
   color: GrayText;
 }
 
-.request-error {
+.request-error,
+.request-followup,
+.request-history {
   flex: 1 1 100%;
   overflow-wrap: anywhere;
+}
+
+.request-followup,
+.request-history {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.request-history {
+  color: GrayText;
 }
 
 .empty {

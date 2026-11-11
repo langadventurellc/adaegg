@@ -278,10 +278,13 @@ describe("request and verify workflows end to end", () => {
 
   it("fails the third pass when the verifier always finds missing work", async () => {
     const calls: Call[] = [];
+    let verifierPasses = false;
     const daemon = makeDaemon(
       fakeQuery(calls, (call, nth, cwd) => {
         if (call.role === "planner") return [planResult("two steps", [planItem("one"), planItem("two", ["one"])])];
-        if (call.role === "verifier") return [planResult("more missing", [planItem(`more-${nth}`)])];
+        if (call.role === "verifier") {
+          return verifierPasses ? [planResult("done", [])] : [planResult("more missing", [planItem(`more-${nth}`)])];
+        }
         if (call.role === "review") return [result({ structured_output: { verdict: "approve", findings: [] } })];
         commitFile(cwd, `impl-${nth}.txt`);
         return [result()];
@@ -326,11 +329,44 @@ describe("request and verify workflows end to end", () => {
     expect(built).toContain("Step more-1");
     expect(contents.slice(contents.indexOf("## Still missing"))).toContain("Step more-2");
 
+    verifierPasses = true;
+
+    const followUpId = (res.body as { id: string }).id;
+    const early = seen(request.id);
+    expect(early.row.delivery?.state).toBe("incomplete");
+    expect(early.row.followUp?.id).toBe(followUpId);
+    expect(early.row.followUp?.delivery.state).toBe("planning");
+    expect(
+      listWorkItems(db)
+        .filter((w) => w.kind === "verify" && w.parentId === request.id)
+        .map((w) => w.status),
+    ).toEqual(["done", "failed"]);
+    expect(early.html).not.toContain('data-action="continue"');
+    expect(early.html).toContain(`data-follow-up-id="${followUpId}"`);
+    expect(early.html).toContain("Continued");
+    expect(early.html).toContain("Step more-2");
+    const followRow = seen(followUpId).row;
+    expect(followRow.kind).toBe("request");
+    expect(followRow.title).toBe("Finish: Build the thing");
+
     await settle(daemon);
     const planners = calls.filter((c) => c.role === "planner");
     const lastPlan = planners[planners.length - 1];
     expect(planners).toHaveLength(2);
     expect(lastPlan?.prompt).toContain(requirement);
     expect(lastPlan?.prompt).toContain("Step more-2");
+
+    const after = seen(request.id);
+    expect(seen(followUpId).row.delivery?.state).toBe("delivered");
+    expect(after.row.delivery?.state).toBe("incomplete");
+    expect(after.row.followUp?.delivery.state).toBe("delivered");
+    expect(
+      listWorkItems(db)
+        .filter((w) => w.kind === "verify" && w.parentId === request.id)
+        .map((w) => w.status),
+    ).toEqual(["done", "failed"]);
+    expect(after.html).toContain("Delivered");
+    expect(after.html).not.toContain('data-action="continue"');
+    expect(after.html).not.toContain("request-error");
   }, 60_000);
 });
