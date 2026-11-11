@@ -365,7 +365,10 @@ describe("request and verify workflows end to end", () => {
         .filter((w) => w.kind === "verify" && w.parentId === request.id)
         .map((w) => w.status),
     ).toEqual(["done", "failed"]);
-    expect(after.html).toContain("Delivered");
+    const followUpParagraph = new RegExp(
+      `<p class="request-followup" data-follow-up-id="${followUpId}">([\\s\\S]*?)</p>`,
+    ).exec(after.html);
+    expect(followUpParagraph?.[1]).toContain("Delivered");
     expect(after.html).not.toContain('data-action="continue"');
     expect(after.html).not.toContain("request-error");
   }, 60_000);
