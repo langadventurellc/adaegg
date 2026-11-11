@@ -1,5 +1,5 @@
 import type { NameEntry } from "../names/names.ts";
-import type { Delivery, RequestRow } from "../server/queue.ts";
+import type { Delivery, FollowUp, RequestRow } from "../server/queue.ts";
 
 export const RESTARTING_MESSAGE = "Your hatchling is restarting. This page will reconnect by itself.";
 
@@ -79,19 +79,37 @@ export function describeDelivery(delivery: Delivery, row: Pick<RequestRow, "stat
   }
 }
 
+function renderFollowUp(followUp: FollowUp, attention: Delivery["attention"]): string[] {
+  let label = describeDelivery(followUp.delivery, followUp);
+  if (followUp.progress !== null && followUp.delivery.state !== "delivered") {
+    label += ` (${progressLabel(followUp.progress)})`;
+  }
+  const retry = followUp.delivery.state === "needs-attention" ? " Retry it in its own row." : "";
+  const parts = [
+    `<p class="request-followup" data-follow-up-id="${escapeHtml(followUp.id)}">The rest of this request was sent as “${escapeHtml(followUp.title)}”: ${escapeHtml(label + retry)}</p>`,
+  ];
+  if (attention !== null && attention.error !== null) {
+    parts.push(`<p class="request-history">The first check found: ${escapeHtml(attention.error)}</p>`);
+  }
+  return parts;
+}
+
 function renderDeliveryRow(row: RequestRow, delivery: Delivery): string {
   const id = escapeHtml(row.id);
   const progress = progressLabel(row.progress);
+  const followUp = delivery.state === "incomplete" ? row.followUp : null;
   const parts = [
-    `<li class="request" data-status="${escapeHtml(delivery.state)}">`,
+    `<li class="request" data-status="${followUp === null ? escapeHtml(delivery.state) : "continued"}">`,
     `<span class="request-title">${escapeHtml(row.title)}</span>`,
-    `<span class="status">${describeDelivery(delivery, row)}</span>`,
+    `<span class="status">${followUp === null ? describeDelivery(delivery, row) : "Continued"}</span>`,
   ];
   if (progress !== "" && delivery.state !== "delivered") {
     parts.push(`<span class="progress">${escapeHtml(progress)}</span>`);
   }
   const attention = delivery.attention;
-  if (attention !== null) {
+  if (followUp !== null) {
+    parts.push(...renderFollowUp(followUp, attention));
+  } else if (attention !== null) {
     let message: string | null;
     if (delivery.state === "failed" || delivery.state === "cancelled") {
       message = attention.error;
