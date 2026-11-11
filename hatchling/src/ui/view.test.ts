@@ -101,6 +101,7 @@ function row(over: Partial<RequestRow> = {}): RequestRow {
     progress: null,
     blockedBy: [],
     delivery: null,
+    followUp: null,
     ...over,
   };
 }
@@ -253,6 +254,76 @@ describe("delivery rows", () => {
     expect(html).toContain("&lt;img src=x&gt; failed: &lt;script&gt;");
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<script>");
+  });
+});
+
+describe("incomplete rows with a follow-up", () => {
+  const rid = "abcd1234-0000-4000-8000-000000000000";
+  const fid = "feed0000-0000-4000-8000-000000000000";
+  const d = (state: Delivery["state"], attention: Delivery["attention"] = null): Delivery => ({ state, attention });
+  const attention = { id: "step0000", title: "Check", error: "gave up", action: "ask-again" as const };
+  const followUp = (
+    state: Delivery["state"],
+    over: Partial<NonNullable<RequestRow["followUp"]>> = {},
+  ): NonNullable<RequestRow["followUp"]> => ({
+    id: fid,
+    title: "Finish: Make a tracker",
+    status: "in_progress",
+    blockedBy: [],
+    progress: null,
+    delivery: d(state),
+    ...over,
+  });
+  const render = (fu: RequestRow["followUp"], att: Delivery["attention"] = attention) =>
+    renderRequests([row({ status: "done", delivery: d("incomplete", att), followUp: fu })]);
+
+  it("shows the follow-up's progress or outcome", () => {
+    const cases: [Delivery["state"], { done: number; total: number } | null, string][] = [
+      ["planning", null, "Working"],
+      ["building", { done: 1, total: 2 }, "Building (1 of 2 done)"],
+      ["verifying", { done: 2, total: 2 }, "Checking the result (2 of 2 done)"],
+      ["delivered", { done: 2, total: 2 }, "Delivered"],
+      ["needs-attention", { done: 1, total: 2 }, "Needs attention (1 of 2 done) Retry it in its own row."],
+    ];
+    for (const [state, progress, label] of cases) {
+      const html = render(followUp(state, { progress }));
+      expect(html).toContain('data-status="continued"');
+      expect(html).toContain('<span class="status">Continued</span>');
+      expect(html).toContain(
+        `<p class="request-followup" data-follow-up-id="${fid}">The rest of this request was sent as “Finish: Make a tracker”: ${label}</p>`,
+      );
+      expect(html).toContain('<p class="request-history">The first check found: gave up</p>');
+      expect(html).not.toContain("data-action");
+      expect(html).not.toContain("request-error");
+      expect(html).not.toContain("Incomplete");
+    }
+    expect(render(followUp("planning"))).not.toContain("Retry it");
+  });
+
+  it("omits the history line without an error", () => {
+    expect(render(followUp("planning"), { ...attention, error: null })).not.toContain("request-history");
+  });
+
+  it("escapes the follow-up title and the findings", () => {
+    const html = render(followUp("planning", { title: `<b>"a" & b` }), { ...attention, error: `<i>"x" & y` });
+    expect(html).toContain("&lt;b&gt;&quot;a&quot; &amp; b");
+    expect(html).toContain("&lt;i&gt;&quot;x&quot; &amp; y");
+    expect(html).not.toContain("<b>");
+    expect(html).not.toContain("<i>");
+  });
+
+  it("renders as before without a follow-up", () => {
+    const html = render(null);
+    expect(html).toContain("The request may still be missing work. gave up");
+    expect(html).toContain(`data-action="continue" data-id="${rid}">Ask for the rest</button>`);
+    expect(html).toContain('data-status="incomplete"');
+  });
+
+  it("keeps Cancel on a queued original", () => {
+    const html = renderRequests([
+      row({ status: "queued", delivery: d("incomplete", attention), followUp: followUp("planning") }),
+    ]);
+    expect(html).toContain(`data-action="cancel" data-id="${rid}"`);
   });
 });
 

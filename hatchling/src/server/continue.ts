@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { addWorkItem, getWorkItem, listWorkItems, type WorkItem } from "../engine/store.ts";
+import { FOLLOW_UP_HEADER, followUpOf } from "./followup.ts";
 import { deliveryOf, titleFromText } from "./queue.ts";
 
 const MAX_FINDINGS = 2_000;
 const MAX_BUILT = 30;
-const HEADER = "Finish the request ";
 const ORIGINAL_HEADING = "## Original request\n";
 const BUILT_HEADING = "\n\n## Already built\n";
 
@@ -15,7 +15,7 @@ function truncate(text: string, max: number): string {
 
 // The request text a continuation wraps, or the contents unchanged for a plain request.
 function unwrap(request: WorkItem): { title: string; contents: string } {
-  if (!request.contents.startsWith(HEADER)) return { title: request.title, contents: request.contents };
+  if (!request.contents.startsWith(FOLLOW_UP_HEADER)) return { title: request.title, contents: request.contents };
   const start = request.contents.indexOf(`\n${ORIGINAL_HEADING}`);
   const end = request.contents.lastIndexOf(BUILT_HEADING);
   if (start === -1 || end <= start) return { title: request.title, contents: request.contents };
@@ -36,13 +36,7 @@ export function continueRequest(db: DatabaseSync, idOrPrefix: string): WorkItem 
   if (delivery.state !== "incomplete") {
     throw new Error(`cannot continue ${id8}: it is ${delivery.state}, not incomplete`);
   }
-  const existing = all.find(
-    (c) =>
-      c.kind === "request" &&
-      c.contents.startsWith(`${HEADER}${id8} `) &&
-      c.status !== "failed" &&
-      c.status !== "cancelled",
-  );
+  const existing = followUpOf(request.id, all);
   if (existing !== undefined) {
     throw new Error(`cannot continue ${id8}: already continued by request ${existing.id.slice(0, 8)}`);
   }
@@ -55,7 +49,7 @@ export function continueRequest(db: DatabaseSync, idOrPrefix: string): WorkItem 
 
   const original = unwrap(request);
   const contents = [
-    `${HEADER}${id8} "${original.title}". Part of it was already built. Build only what is still missing and do not redo the built work.`,
+    `${FOLLOW_UP_HEADER}${id8} "${original.title}". Part of it was already built. Build only what is still missing and do not redo the built work.`,
     "",
     "## Original request",
     original.contents,
