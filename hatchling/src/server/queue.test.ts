@@ -184,3 +184,81 @@ describe("deliveryOf", () => {
     expect(rows.find((r) => r.id === plain.id)?.delivery).toBeNull();
   });
 });
+
+describe("summarizeQueue followUp", () => {
+  const request = (over: Partial<ListedWorkItem> = {}) => item({ kind: "request", status: "done", ...over });
+  const step = (p: ListedWorkItem, over: Partial<ListedWorkItem> = {}) =>
+    item({ parentId: p.id, kind: "item", ...over });
+  const verify = (p: ListedWorkItem, over: Partial<ListedWorkItem> = {}) =>
+    item({ parentId: p.id, kind: "verify", ...over });
+  const continuation = (original: ListedWorkItem, over: Partial<ListedWorkItem> = {}) =>
+    request({ contents: `Finish the request ${original.id.slice(0, 8)} "x"…`, status: "queued", ...over });
+  const rowOf = (items: ListedWorkItem[], id: string) => {
+    const row = summarizeQueue(items).requests.find((r) => r.id === id);
+    if (row === undefined) throw new Error("no row");
+    return row;
+  };
+
+  it("is null without a follow-up", () => {
+    const original = request();
+    expect(rowOf([original], original.id).followUp).toBeNull();
+  });
+
+  it("shows a queued, planning, building and delivered follow-up", () => {
+    const original = request();
+    const queued = continuation(original);
+    expect(rowOf([original, queued], original.id).followUp).toEqual({
+      id: queued.id,
+      title: queued.title,
+      status: "queued",
+      blockedBy: [],
+      progress: null,
+      delivery: { state: "planning", attention: null },
+    });
+
+    const planning = continuation(original, { status: "in_progress" });
+    expect(rowOf([original, planning], original.id).followUp?.delivery.state).toBe("planning");
+
+    const building = continuation(original, { status: "done" });
+    const kids = [step(building, { status: "done" }), step(building, { status: "queued" })];
+    const built = rowOf([original, building, ...kids], original.id).followUp;
+    expect(built?.delivery.state).toBe("building");
+    expect(built?.progress).toEqual({ done: 1, total: 2 });
+
+    const delivered = continuation(original, { status: "done" });
+    const done = [step(delivered, { status: "done" }), step(delivered, { status: "done" })];
+    const result = rowOf([original, delivered, ...done], original.id).followUp;
+    expect(result?.delivery.state).toBe("delivered");
+    expect(result?.progress).toEqual({ done: 2, total: 2 });
+  });
+
+  it("ignores a failed or cancelled follow-up and picks a later live one", () => {
+    const original = request();
+    const failed = continuation(original, { status: "failed", error: "boom" });
+    const cancelled = continuation(original, { status: "cancelled" });
+    expect(rowOf([original, failed, cancelled], original.id).followUp).toBeNull();
+    const live = continuation(original);
+    expect(rowOf([original, failed, live], original.id).followUp?.id).toBe(live.id);
+  });
+
+  it("is null on a top-level item", () => {
+    const plain = item({ kind: "item" });
+    expect(rowOf([plain], plain.id).followUp).toBeNull();
+  });
+
+  it("leaves the original row's own fields unchanged", () => {
+    const original = request();
+    const kids = [
+      step(original, { status: "done" }),
+      verify(original, { status: "failed", error: `${EXHAUSTED_ROUNDS_PREFIX} 2 verification rounds.` }),
+    ];
+    const without = rowOf([original, ...kids], original.id);
+    const followUp = continuation(original);
+    const withFollowUp = rowOf([original, ...kids, followUp], original.id);
+    expect(withFollowUp.delivery).toEqual(without.delivery);
+    expect(withFollowUp.progress).toEqual(without.progress);
+    expect(withFollowUp.status).toEqual(without.status);
+    expect(withFollowUp.delivery?.state).toBe("incomplete");
+    expect(withFollowUp.followUp?.id).toBe(followUp.id);
+  });
+});

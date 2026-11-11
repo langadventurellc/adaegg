@@ -30,7 +30,7 @@ Items are created by the `hatch add` CLI, by the `enqueue` node (planned items),
 
 The `parent_id` of planned items and of their verification is the root request.
 
-A continuation of an incomplete request (`POST /api/items/<id>/continue`, `hatch continue <id>`) is a normal `request` linked to the original only by its text (`Finish the request <id8>`), with no schema change.
+A continuation of an incomplete request (`POST /api/items/<id>/continue`, `hatch continue <id>`) is a normal `request` linked to the original only by its text (`Finish the request <id8>`), with no schema change. The link is still only that text: `followUpOf` in `followup.ts` finds it, and both `continueRequest` and the queue summary use it, so the summary can show the follow-up on the original row.
 
 ## Statuses and transitions
 

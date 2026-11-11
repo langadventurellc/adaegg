@@ -101,6 +101,7 @@ function row(over: Partial<RequestRow> = {}): RequestRow {
     progress: null,
     blockedBy: [],
     delivery: null,
+    followUp: null,
     ...over,
   };
 }

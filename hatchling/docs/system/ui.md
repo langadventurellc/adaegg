@@ -1,6 +1,6 @@
 # The UI server
 
-The daemon also serves a small local web server: a guarded JSON API and the browser UI. The code is in `src/server/`: `server.ts` (the `node:http` server), `guard.ts` (the request guard), `api.ts` (the routes) and `queue.ts` (the queue summary with `deliveryOf`, and titles). Vite runs in middleware mode and serves `index.html` and `src/ui/`, so the UI changes by editing source: the daemon needs no build step.
+The daemon also serves a small local web server: a guarded JSON API and the browser UI. The code is in `src/server/`: `server.ts` (the `node:http` server), `guard.ts` (the request guard), `api.ts` (the routes), `followup.ts` (finds the live follow-up of a request) and `queue.ts` (the queue summary with `deliveryOf`, and titles). Vite runs in middleware mode and serves `index.html` and `src/ui/`, so the UI changes by editing source: the daemon needs no build step.
 
 ## Config and URL
 
@@ -41,6 +41,7 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
   - `progress: { done: number, total: number } | null`: counts of the row's child items of kind `item` (`done` are those with status `done`); `null` when it has none. `verify` children are not counted.
   - `blockedBy: string[]`, ids of the items it waits for (empty when none).
   - `delivery: { state, attention } | null`: `null` for a row of kind `item`. For a `request`, `state` is `planning`, `building`, `verifying`, `delivered`, `needs-attention`, `incomplete`, `failed` or `cancelled`, derived by `deliveryOf` in `queue.ts` from the parent, its steps and its verifications. `attention` is `null` or `{ id, title, error, action }` naming the item that needs a human: `action` is `retry` for a failed or cancelled step or verification and for a failed or cancelled request, and `ask-again` for `incomplete` (verification gave up with work missing). `status` stays the parent item's status (a planned request is `done` while its steps are still queued), and `progress` still counts only step children.
+  - `followUp: { id, title, status, blockedBy, progress, delivery } | null`: the live follow-up of an incomplete request, found by `followUpOf` in `followup.ts`; `progress` and `delivery` are computed from the follow-up's own children like the row's. It is `null` when there is none, when it failed or was cancelled, and always for a row of kind `item`. It never changes the row's own `delivery`, `progress`, `status` or `error`.
 
 Anything asked through `/api/ask` is a `request`, which the daemon plans into items and verifies (see [workflows](workflows.md)), so the user never writes a spec.
 
