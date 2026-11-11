@@ -1,5 +1,6 @@
 import { EXHAUSTED_ROUNDS_PREFIX } from "../engine/nodes/enqueue.ts";
 import type { ListedWorkItem, Status } from "../engine/store.ts";
+import { followUpOf } from "./followup.ts";
 
 export type Delivery = {
   state:
@@ -14,6 +15,15 @@ export type Delivery = {
   attention: { id: string; title: string; error: string | null; action: "retry" | "ask-again" } | null;
 };
 
+export type FollowUp = {
+  id: string;
+  title: string;
+  status: Status;
+  blockedBy: string[];
+  progress: { done: number; total: number } | null;
+  delivery: Delivery;
+};
+
 export type RequestRow = {
   id: string;
   title: string;
@@ -24,6 +34,7 @@ export type RequestRow = {
   progress: { done: number; total: number } | null;
   blockedBy: string[];
   delivery: Delivery | null;
+  followUp: FollowUp | null;
 };
 
 export type QueueSummary = { counts: Record<Status, number>; requests: RequestRow[] };
@@ -105,6 +116,18 @@ export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
   );
   for (const { item } of ordered) {
     if (item.parentId !== null || (item.kind !== "request" && item.kind !== "item")) continue;
+    const found = item.kind === "request" ? followUpOf(item.id, items) : undefined;
+    const followUp: FollowUp | null =
+      found === undefined
+        ? null
+        : {
+            id: found.id,
+            title: found.title,
+            status: found.status,
+            blockedBy: found.blockedBy,
+            progress: progressOf(children.get(found.id) ?? []),
+            delivery: deliveryOf(found, children.get(found.id) ?? []),
+          };
     requests.push({
       id: item.id,
       title: item.title,
@@ -115,6 +138,7 @@ export function summarizeQueue(items: ListedWorkItem[]): QueueSummary {
       progress: progressOf(children.get(item.id) ?? []),
       blockedBy: item.blockedBy,
       delivery: item.kind === "request" ? deliveryOf(item, children.get(item.id) ?? []) : null,
+      followUp,
     });
     if (requests.length === MAX_ROWS) break;
   }
