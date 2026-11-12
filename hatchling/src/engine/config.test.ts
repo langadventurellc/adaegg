@@ -24,7 +24,7 @@ describe("loadConfig", () => {
       setup: "npm ci",
       checksTimeoutMinutes: 20,
       maxConcurrentRuns: 1,
-      models: { implement: "sonnet", review: "sonnet" },
+      models: { implement: "sonnet", review: "sonnet", chat: "sonnet" },
       ui: { enabled: true, port: 4747 },
     });
   });
@@ -41,7 +41,12 @@ describe("loadConfig", () => {
 
   it("defaults a model that is not named and accepts overrides", () => {
     writeFileSync(join(dir, "adaegg.json"), '{ "schema": 1, "models": { "review": "opus" } }');
-    expect(loadConfig(dir).models).toEqual({ implement: "sonnet", review: "opus" });
+    expect(loadConfig(dir).models).toEqual({ implement: "sonnet", review: "opus", chat: "sonnet" });
+  });
+
+  it("keeps an explicit models.chat and defaults the other keys", () => {
+    writeFileSync(join(dir, "adaegg.json"), '{ "schema": 1, "models": { "chat": "haiku" } }');
+    expect(loadConfig(dir).models).toEqual({ implement: "sonnet", review: "sonnet", chat: "haiku" });
   });
 
   it("rejects a model that is not a string", () => {

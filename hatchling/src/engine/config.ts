@@ -15,8 +15,9 @@ export const ConfigSchema = z.object({
     .object({
       implement: z.string().default("sonnet"),
       review: z.string().default("sonnet"),
+      chat: z.string().default("sonnet"),
     })
-    .default({ implement: "sonnet", review: "sonnet" }),
+    .default({ implement: "sonnet", review: "sonnet", chat: "sonnet" }),
   // Port 0 means the OS picks a free port. 4747 avoids 3000, 4317 (OpenTelemetry), 5173 (Vite) and 8080.
   ui: z
     .object({
