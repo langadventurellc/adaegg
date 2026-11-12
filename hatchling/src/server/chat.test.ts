@@ -8,8 +8,10 @@ import { addChatTurn, finishChatTurn, INTERRUPTED_TEXT, listChatMessages } from 
 import { type Config, ConfigSchema } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
 import type { QueryFn } from "../engine/nodes/agent.ts";
+import { EXHAUSTED_ROUNDS_PREFIX } from "../engine/nodes/enqueue.ts";
 import { addWorkItem, listWorkItems } from "../engine/store.ts";
-import { CHAT_JSON_SCHEMA, CHAT_NO_REPLY, createChatRunner, MAX_REQUEST_CONTENTS } from "./chat.ts";
+import { buildChatPrompt, CHAT_JSON_SCHEMA, CHAT_NO_REPLY, createChatRunner, MAX_REQUEST_CONTENTS } from "./chat.ts";
+import { FOLLOW_UP_HEADER } from "./followup.ts";
 
 const PROMPT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts", "chat.md");
 
@@ -76,6 +78,126 @@ async function turn(query: QueryFn, text = "hello", extra: { timeoutMs?: number;
   await r.stop();
   return { message, replyId };
 }
+
+describe("queue digest", () => {
+  function queue() {
+    const { replyId } = addChatTurn(db, "Why did it stop?");
+    const prompt = buildChatPrompt(db, "role", replyId);
+    return prompt.slice(prompt.indexOf("# Queue"), prompt.indexOf("# Latest message"));
+  }
+
+  function request(status = "done", error: string | null = null, contents = "x") {
+    const parent = addWorkItem(db, { kind: "request", title: "Build a tip page", contents });
+    db.prepare("UPDATE work_items SET status = ?, error = ? WHERE id = ?").run(status, error, parent.id);
+    return parent;
+  }
+
+  function child(parentId: string, kind: "item" | "verify", error: string | null, status = "failed") {
+    const step = addWorkItem(db, { kind, parentId, title: "Add the tip form", contents: "x" });
+    db.prepare("UPDATE work_items SET status = ?, error = ? WHERE id = ?").run(status, error, step.id);
+    return step;
+  }
+
+  it("names the failing implementation step, reason and Retry recovery", () => {
+    const parent = request();
+    const step = child(parent.id, "item", "tests failed: x");
+    const digest = queue();
+    expect(digest).toContain(`"${parent.title}" needs-attention\n`);
+    expect(digest).toContain(
+      `  needs attention: step ${step.id.slice(0, 8)} "Add the tip form" failed: tests failed: x. Recovery: Retry that step.`,
+    );
+  });
+
+  it("describes a cancelled step without calling it failed", () => {
+    child(request().id, "item", null, "cancelled");
+    const digest = queue();
+    expect(digest).toContain('"Add the tip form" was cancelled. Recovery: Retry that step.');
+    expect(digest).not.toContain("failed:");
+  });
+
+  it("preserves exhausted verification findings and the continuation recovery", () => {
+    child(
+      request().id,
+      "verify",
+      `${EXHAUSTED_ROUNDS_PREFIX} 3 verification rounds. The verifier wanted: "Add X", "Add Y"`,
+    );
+    const digest = queue();
+    expect(digest).toContain("incomplete: the last verification found missing work:");
+    expect(digest).toContain('The verifier wanted: "Add X", "Add Y"');
+    expect(digest).toContain('Recovery: "Ask for the rest" queues a continuation request.');
+  });
+
+  it("offers Retry for an ordinary verification failure", () => {
+    const step = child(request().id, "verify", "verification crashed");
+    const digest = queue();
+    expect(digest).toContain("needs-attention");
+    expect(digest).toContain(`step ${step.id.slice(0, 8)} "${step.title}" failed: verification crashed`);
+    expect(digest).toContain("Recovery: Retry that step.");
+  });
+
+  it("prints a failed request's error exactly once", () => {
+    request("failed", "boom");
+    const digest = queue();
+    expect(digest.match(/boom/g)).toHaveLength(1);
+    expect(digest).toContain("request failed: boom. Recovery: Retry that request.");
+  });
+
+  it("describes a cancelled request and its recovery", () => {
+    request("cancelled");
+    expect(queue()).toContain("request was cancelled. Recovery: Retry that request.");
+  });
+
+  it("does not invent a reason for a failed request with no error", () => {
+    request("failed");
+    expect(queue()).toContain("request failed (no reason recorded). Recovery: Retry that request.");
+  });
+
+  it.each([false, true])("shows a continuation and its attention when broken=%s", (broken) => {
+    const parent = request();
+    child(parent.id, "verify", `${EXHAUSTED_ROUNDS_PREFIX} 3 rounds`);
+    const followUp = request(broken ? "done" : "queued", null, `${FOLLOW_UP_HEADER}${parent.id.slice(0, 8)} rest`);
+    const step = broken ? child(followUp.id, "item", "follow-up failed") : null;
+    const digest = queue();
+    expect(digest).toContain(
+      `  continued as request ${followUp.id.slice(0, 8)} "${followUp.title}": ${broken ? "needs-attention" : "planning"}`,
+    );
+    if (step !== null) {
+      expect(digest).toContain(
+        `    needs attention: step ${step.id.slice(0, 8)} "${step.title}" failed: follow-up failed. Recovery: Retry it in its own row.`,
+      );
+    }
+    const parentRow = digest.slice(digest.indexOf(`${parent.id.slice(0, 8)} "`));
+    expect(parentRow.trimEnd().split("\n")).toHaveLength(broken ? 4 : 3);
+  });
+
+  it("caps attention errors at 800 characters including the ellipsis", () => {
+    child(request().id, "item", "x".repeat(5_000));
+    const line =
+      queue()
+        .split("\n")
+        .find((line) => line.startsWith("  needs attention:")) ?? "";
+    const error = line.split("failed: ")[1]?.split(". Recovery:")[0] ?? "";
+    expect(error).toHaveLength(800);
+    expect(error.endsWith("…")).toBe(true);
+    expect(line.length).toBeLessThan(1_000);
+  });
+
+  it("flattens multiline attention errors", () => {
+    child(request().id, "item", "first\r\nsecond\nthird\rfourth");
+    const digest = queue();
+    expect(digest).toContain("failed: first second third fourth. Recovery:");
+    expect(digest.trim().split("\n")).toHaveLength(4);
+  });
+
+  it("keeps the old error suffix for rows without attention", () => {
+    request("queued", "planning error");
+    const item = addWorkItem(db, { kind: "item", title: "Standalone", contents: "x" });
+    db.prepare("UPDATE work_items SET status = 'failed', error = 'item error' WHERE id = ?").run(item.id);
+    const digest = queue();
+    expect(digest).toContain('"Build a tip page" planning - planning error');
+    expect(digest).toContain('"Standalone" failed - item error');
+  });
+});
 
 describe("chat runner", () => {
   it("queues the request the agent wrote and links it", async () => {

@@ -11,6 +11,7 @@ How to answer:
 - **The `request` is not the user's raw text.** The `title` is a clear sentence of at most 80 characters. The `contents` state what the user wants, the decisions made in the chat, your assumptions, and which existing page or file it changes (found by reading). Write them for a planner that cannot ask questions. Put no code in the contents. When the conversation holds an ask you have not queued yet, the `contents` must carry every requirement of it, including those late in a long message, together with the decisions the user made in answers, and must not shorten them to a summary.
 - A request asked in the UI is built as a page the user can open in the browser (see "Building what the user asks for" in `AGENTS.md`), unless the user asks for something else.
 - **Answer simple questions** about the hatchling (what pages exist, why a request failed, what is queued) from the code, the docs and the queue digest, without queueing anything.
+- **Explain failures from the attention lines.** The digest's indented lines after a request say which step needs attention, why, and what recovery the user has, including continuations. Use those facts and don't guess beyond them. If a line has no reason, say so and point to `hatch show <id8>` for the request or step concerned.
 - **Never queue what the digest shows is already queued, building or delivered.** After a request was queued, treat a message that clearly starts something new as a new topic.
 - Never ask for, read or repeat credentials.
 
