@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ChatMessage } from "../engine/chat.ts";
 import { NAMES, type NameEntry } from "../names/names.ts";
 import type { RequestRow } from "../server/queue.ts";
 import {
@@ -7,11 +8,15 @@ import {
   applyFetched,
   applyFetchResult,
   applyUnreachable,
+  canSend,
   type FetchResult,
   initialSession,
   initialState,
+  isSendKey,
   nameSaved,
+  pollDelayMs,
   type ScreenState,
+  scrollsToEnd,
   setError,
   setValue,
   startRename,
@@ -89,7 +94,16 @@ describe("session sequencing", () => {
   const row = { id: "r1" } as unknown as RequestRow;
   const fetched = (name: string | null): FetchResult => ({
     kind: "state",
-    state: { name, queue: { requests: [row] } },
+    state: { name, queue: { requests: [row] }, chat },
+  });
+  const chat = { messages: [{ id: 1 } as unknown as ChatMessage], busy: true };
+
+  it("stores chat from a fresh fetch and leaves it alone on a stale epoch", () => {
+    const s = applyFetchResult(initialSession(), 0, fetched("A"), () => 0);
+    expect(s.chat).toEqual(chat);
+    const stale = actionFinished(initialSession());
+    expect(applyFetchResult(stale, 0, fetched("A"), () => 0).chat).toEqual({ messages: [], busy: false });
+    expect(applyFetchResult(s, 0, { kind: "unreachable" }, () => 0).chat).toEqual(chat);
   });
 
   it("applies a fetch started in the current epoch", () => {
@@ -131,6 +145,46 @@ describe("session sequencing", () => {
     s = applyFetchResult(s, 0, fetched("A"), () => 0);
     expect(s.screen.unreachable).toBe(false);
     expect(s.error).toBeNull();
+  });
+});
+
+describe("chat helpers", () => {
+  const m = (id: number, over: Partial<ChatMessage> = {}) =>
+    ({ id, role: "assistant", text: "", status: "done", ...over }) as unknown as ChatMessage;
+  const key = (k: string, over: Partial<{ shiftKey: boolean; isComposing: boolean }> = {}) => ({
+    key: k,
+    shiftKey: false,
+    isComposing: false,
+    ...over,
+  });
+
+  it("polls every second while busy and every three otherwise", () => {
+    expect(pollDelayMs({ chat: { messages: [], busy: true } })).toBe(1000);
+    expect(pollDelayMs({ chat: { messages: [], busy: false } })).toBe(3000);
+  });
+
+  it("canSend needs text and an idle chat", () => {
+    expect(canSend("", false)).toBe(false);
+    expect(canSend("  \n ", false)).toBe(false);
+    expect(canSend("hi", true)).toBe(false);
+    expect(canSend(" hi ", false)).toBe(true);
+  });
+
+  it("isSendKey sends on a plain Enter only", () => {
+    expect(isSendKey(key("Enter"))).toBe(true);
+    expect(isSendKey(key("Enter", { shiftKey: true }))).toBe(false);
+    expect(isSendKey(key("Enter", { isComposing: true }))).toBe(false);
+    expect(isSendKey(key("a"))).toBe(false);
+  });
+
+  it("scrollsToEnd follows new or changed messages only from the bottom", () => {
+    const before = [m(1, { status: "pending" })];
+    expect(scrollsToEnd(before, [...before, m(2)], true)).toBe(true);
+    expect(scrollsToEnd(before, [...before, m(2)], false)).toBe(false);
+    expect(scrollsToEnd(before, [m(1, { status: "done", text: "ok" })], true)).toBe(true);
+    expect(scrollsToEnd(before, [m(1, { status: "pending", text: "x" })], true)).toBe(true);
+    expect(scrollsToEnd(before, [m(1, { status: "done", text: "ok" })], false)).toBe(false);
+    expect(scrollsToEnd(before, [m(1, { status: "pending" })], true)).toBe(false);
   });
 });
 

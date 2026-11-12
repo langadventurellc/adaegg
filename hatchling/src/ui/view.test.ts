@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ChatMessage } from "../engine/chat.ts";
 import type { NameEntry } from "../names/names.ts";
 import { pickSuggestions } from "../names/suggest.ts";
 import type { Delivery, RequestRow } from "../server/queue.ts";
@@ -6,15 +7,19 @@ import {
   describeDelivery,
   describeStatus,
   escapeHtml,
+  hasOtherRequests,
   progressLabel,
   RESTARTING_MESSAGE,
   renderAsk,
   renderBanner,
   renderNotFound,
   renderOnboarding,
+  renderOtherRequests,
   renderPageError,
   renderPageHeader,
+  renderRequestCard,
   renderRequests,
+  renderThread,
   routeFor,
   screenFor,
 } from "./view.ts";
@@ -76,12 +81,12 @@ describe("renderAsk pages", () => {
     { id: "notes", title: '<b>&"' },
   ];
 
-  it("lists one link per page with escaped titles, before Your requests", () => {
+  it("lists one link per page with escaped titles, before Other requests", () => {
     const html = renderAsk({ name: "Hopper", starters: [], pages });
     expect(html).toContain('<a href="#/tip">Tip calculator</a>');
     expect(html).toContain('<a href="#/notes">&lt;b&gt;&amp;&quot;</a>');
     expect(html).toContain("Your pages");
-    expect(html.indexOf("Your pages")).toBeLessThan(html.indexOf("Your requests"));
+    expect(html.indexOf("Your pages")).toBeLessThan(html.indexOf("Other requests"));
   });
 
   it("renders no section with no pages", () => {
@@ -347,22 +352,157 @@ describe("renderAsk", () => {
   it("renders the form, starters and requests", () => {
     const html = renderAsk({ name: "Hopper", starters: ["Track my books", 'A "quoted" one'] });
     expect(html).toContain("<h1>Ask Hopper</h1>");
-    expect(html).toMatch(/<label for="ask-text">/);
-    expect(html).toMatch(/<textarea id="ask-text"/);
+    expect(html).toMatch(/<label for="ask-text" class="visually-hidden">/);
+    expect(html).toMatch(/<textarea id="ask-text"[^>]*placeholder="What would you like it to do\?"/);
     expect(html).toContain('id="ask-form"');
-    expect(html).toContain('id="requests"');
+    expect(html).toContain('id="thread"');
+    expect(html).toContain('id="other-requests"');
     expect(html).toContain('data-text="Track my books"');
     expect(html).toContain('data-text="A &quot;quoted&quot; one"');
     expect(html).toContain("Not sure where to start?");
-    expect(html).toContain("Your requests");
+    expect(html).not.toContain("Your requests");
+    expect(html).toContain('<button type="submit" class="primary">Send</button>');
     expect(html).toContain('data-action="rename">Change name');
   });
 
-  it("escapes the name and includes given requests", () => {
+  it("escapes the name and lists given requests no message references under Other requests", () => {
     const html = renderAsk({ name: "<b>x</b>", starters: [], requests: [row({ title: "Mine" })] });
     expect(html).toContain("Ask &lt;b&gt;x&lt;/b&gt;");
     expect(html).not.toContain("<b>x</b>");
     expect(html).toContain("Mine");
+    expect(html).toContain('<section class="other-requests">');
+  });
+
+  it("disables Send only while busy", () => {
+    expect(renderAsk({ name: "H", starters: [], chat: { messages: [], busy: true } })).toContain(
+      '<button type="submit" class="primary" disabled>Send</button>',
+    );
+    expect(renderAsk({ name: "H", starters: [], chat: { messages: [], busy: false } })).not.toContain("disabled");
+  });
+
+  it("shows the welcome and starters only for an empty thread", () => {
+    const empty = renderAsk({ name: "H", starters: ["Go"] });
+    expect(empty).toContain("Tell me what you want and I&#39;ll build it");
+    expect(empty).toContain('data-action="starter"');
+    const full = renderAsk({ name: "H", starters: ["Go"], chat: { messages: [msg({ role: "user" })], busy: false } });
+    expect(full).not.toContain("Tell me what you want");
+    expect(full).not.toContain('data-action="starter"');
+    expect(full).not.toContain("Not sure where to start?");
+  });
+
+  it("puts the thread before the form and hides Other requests when every row is referenced", () => {
+    const r = row();
+    const html = renderAsk({
+      name: "H",
+      starters: [],
+      requests: [r],
+      chat: { messages: [msg({ requestId: r.id, requestTitle: r.title })], busy: false },
+    });
+    expect(html.indexOf('id="thread"')).toBeLessThan(html.indexOf('id="ask-form"'));
+    expect(html).toContain('<section class="other-requests" hidden>');
+    expect(html).toContain('<div id="other-requests"></div>');
+  });
+
+  it("lists only unreferenced rows under Other requests", () => {
+    const a = row({ id: "aaaa", title: "In chat" });
+    const b = row({ id: "bbbb", title: "From terminal" });
+    const messages = [msg({ requestId: "aaaa", requestTitle: "In chat" })];
+    expect(hasOtherRequests(messages, [a, b])).toBe(true);
+    expect(hasOtherRequests(messages, [a])).toBe(false);
+    const inner = renderOtherRequests(messages, [a, b]);
+    expect(inner).toContain("From terminal");
+    expect(inner).not.toContain("In chat");
+    expect(renderOtherRequests(messages, [a])).toBe("");
+  });
+});
+
+function msg(over: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: 1,
+    role: "assistant",
+    text: "Queued it.",
+    status: "done",
+    requestId: null,
+    requestTitle: null,
+    createdAt: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
+
+describe("renderRequestCard", () => {
+  it("is what renderRequests wraps", () => {
+    const r = row();
+    expect(renderRequests([r])).toBe(`<ul class="requests" aria-live="polite">${renderRequestCard(r)}</ul>`);
+  });
+});
+
+describe("renderThread", () => {
+  const rid = "abcd1234-0000-4000-8000-000000000000";
+  const d = (state: Delivery["state"], attention: Delivery["attention"] = null): Delivery => ({ state, attention });
+  const retry = { id: rid, title: "Make a tracker", error: "bad", action: "retry" as const };
+  const askAgain = { id: "step0000", title: "Check", error: "gave up", action: "ask-again" as const };
+  const cases: [string, RequestRow, string[]][] = [
+    ["building", row({ status: "in_progress", delivery: d("building") }), ["Building"]],
+    ["verifying", row({ status: "in_progress", delivery: d("verifying") }), ["Checking the result"]],
+    ["delivered", row({ status: "done", delivery: d("delivered") }), ["Delivered"]],
+    [
+      "needs-attention",
+      row({ status: "done", delivery: d("needs-attention", retry) }),
+      ["Needs attention", 'data-action="retry"'],
+    ],
+    [
+      "incomplete",
+      row({ status: "done", delivery: d("incomplete", askAgain) }),
+      ["Incomplete", "Ask for the rest", 'data-action="continue"'],
+    ],
+    ["queued", row({ delivery: d("planning") }), ["Waiting", 'data-action="cancel"']],
+  ];
+
+  it.each(cases)("shows the %s card as renderRequests does", (_name, r, labels) => {
+    const html = renderThread(
+      [msg({ id: 1, role: "user", text: "Make it" }), msg({ id: 2, requestId: r.id, requestTitle: r.title })],
+      [r],
+    );
+    expect(html).toContain(`<ul class="requests">${renderRequestCard(r)}</ul>`);
+    for (const label of labels) {
+      expect(html).toContain(label);
+      expect(renderRequests([r])).toContain(label);
+    }
+    expect(html).toContain('<li class="message message-user" data-status="done">');
+    expect(html).toContain('<li class="message message-assistant" data-status="done">');
+  });
+
+  it("shows Thinking… for a pending reply, not its text", () => {
+    const html = renderThread([msg({ status: "pending", text: "" })], []);
+    expect(html).toContain("Thinking…");
+    expect(html).toContain('data-status="pending"');
+  });
+
+  it("shows a failed reply's text with the error class", () => {
+    const html = renderThread([msg({ status: "failed", text: "Something broke" })], []);
+    expect(html).toContain('class="message-text message-error">Something broke</p>');
+  });
+
+  it("escapes message text and request titles", () => {
+    const r = row({ title: "<img src=x>" });
+    const html = renderThread([msg({ text: "<script>alert(1)</script>" })], []);
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    const earlier = renderThread([msg({ requestId: "gone", requestTitle: "<b>old</b>" })], [r]);
+    expect(earlier).not.toContain("<b>");
+    expect(renderThread([msg({ requestId: r.id, requestTitle: r.title })], [r])).not.toContain("<img");
+  });
+
+  it("shows only the title of a request that is no longer among the rows", () => {
+    const html = renderThread([msg({ requestId: "gone", requestTitle: "Old one" })], []);
+    expect(html).toContain('<p class="request-earlier">Earlier request: Old one</p>');
+    expect(html).not.toContain("<button");
+  });
+
+  it("renders the welcome for an empty thread", () => {
+    expect(renderThread([], [])).toBe(
+      '<ol class="thread"><li class="empty">Tell me what you want and I&#39;ll build it, or ask me about what you already have.</li></ol>',
+    );
   });
 });
 

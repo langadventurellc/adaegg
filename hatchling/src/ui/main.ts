@@ -102,7 +102,7 @@ function fullRender(): void {
     body = renderNotFound(name);
   } else {
     title = `Ask ${name}`;
-    body = renderAsk({ name, starters, requests: session.rows, pages: PAGES });
+    body = renderAsk({ name, starters, requests: session.rows, pages: PAGES, chat: session.chat });
   }
   app.innerHTML = `<div id="banner">${bannerHtml()}</div><main>${body}</main>`;
   document.title = title;
