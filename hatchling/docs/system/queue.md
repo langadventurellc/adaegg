@@ -26,7 +26,7 @@ Blockers are rows in `work_item_blocks(item_id, blocked_by_id)`.
 - `verify`: checks that a request was delivered.
 - A cron workflow's id: scheduled items. `fireDueSchedules` adds one, titled with the workflow's `name`, when its schedule is due and none of that kind is `queued` or `in_progress` (see the `cron` trigger in `workflows.md`).
 
-Items are created by the `hatch add` CLI, by the `enqueue` node (planned items), by cron schedules, and by the UI API: `POST /api/ask` adds a `request` (see [ui](ui.md)).
+Items are created by the `hatch add` CLI, by the `enqueue` node (planned items), by cron schedules, and by the UI API: `POST /api/ask` adds a `request` (see [ui](ui.md)). A request queued by the chat (`POST /api/chat`) is an ordinary `request` work item too.
 
 The `parent_id` of planned items and of their verification is the root request.
 

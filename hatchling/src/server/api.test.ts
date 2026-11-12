@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { listChatMessages } from "../engine/chat.ts";
 import { openDb } from "../engine/db.ts";
 import { addWorkItem, claimNext, failWorkItem, finishWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
 import { handleApi } from "./api.ts";
@@ -63,6 +64,78 @@ describe("handleApi ask", () => {
 
   it.each([[[]], [null], ["x"], [3], [undefined]])("rejects the body %j", (body) => {
     expect(post(openDb(":memory:"), "/api/ask", body).status).toBe(400);
+  });
+});
+
+describe("handleApi chat", () => {
+  const postChat = (db: ReturnType<typeof openDb>, body: unknown, start = vi.fn()) =>
+    handleApi(db, { method: "POST", path: "/api/chat", body }, { chat: { start } });
+
+  it("stores the turn, starts the reply and answers 202", () => {
+    const db = openDb(":memory:");
+    const start = vi.fn();
+    const res = postChat(db, { text: "  Add a dark mode " }, start);
+    expect(res.status).toBe(202);
+    const { messageId, replyId } = res.body as { messageId: number; replyId: number };
+    expect(start).toHaveBeenCalledExactlyOnceWith(replyId);
+    expect(listChatMessages(db).map((m) => [m.id, m.role, m.text, m.status])).toEqual([
+      [messageId, "user", "Add a dark mode", "done"],
+      [replyId, "assistant", "", "pending"],
+    ]);
+    expect(listWorkItems(db)).toHaveLength(0);
+  });
+
+  it.each([[[]], [null], ["x"], [{ text: 5 }], [{ text: " \n" }], [{ text: "a".repeat(10_001) }], [{}]])(
+    "rejects the body %j without starting",
+    (body) => {
+      const db = openDb(":memory:");
+      const start = vi.fn();
+      expect(postChat(db, body, start).status).toBe(400);
+      expect(start).not.toHaveBeenCalled();
+      expect(listChatMessages(db)).toHaveLength(0);
+    },
+  );
+
+  it("answers 409 while a turn is pending", () => {
+    const db = openDb(":memory:");
+    const start = vi.fn();
+    postChat(db, { text: "one" }, start);
+    const res = postChat(db, { text: "two" }, start);
+    expect(res).toEqual({ status: 409, body: { error: "Still answering your last message." } });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(listChatMessages(db)).toHaveLength(2);
+  });
+
+  it("answers 503 without a chat runner, after validating the body", () => {
+    const db = openDb(":memory:");
+    expect(post(db, "/api/chat", { text: "hi" })).toEqual({ status: 503, body: { error: "Chat is not available." } });
+    expect(post(db, "/api/chat", { text: "" }).status).toBe(400);
+    expect(listChatMessages(db)).toHaveLength(0);
+  });
+
+  it("answers 405 for GET", () => {
+    expect(get(openDb(":memory:"), "/api/chat").status).toBe(405);
+  });
+
+  it("carries the thread and busy in the state", () => {
+    const db = openDb(":memory:");
+    expect(get(db, "/api/state").body).toMatchObject({ chat: { messages: [], busy: false } });
+    postChat(db, { text: "hello" });
+    const state = get(db, "/api/state").body as { chat: { messages: { role: string }[]; busy: boolean } };
+    expect(state.chat.busy).toBe(true);
+    expect(state.chat.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("leaves /api/ask queueing the raw text", () => {
+    const db = openDb(":memory:");
+    const res = handleApi(
+      db,
+      { method: "POST", path: "/api/ask", body: { text: "raw words" } },
+      { chat: { start() {} } },
+    );
+    expect(res.status).toBe(201);
+    expect(listWorkItems(db).map((i) => i.contents)).toEqual(["raw words"]);
+    expect(listChatMessages(db)).toHaveLength(0);
   });
 });
 

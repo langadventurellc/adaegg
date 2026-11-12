@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { isChatBusy } from "../engine/chat.ts";
 import { ConfigSchema } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
 import { createAgentNode, createReviewNode, type QueryFn } from "../engine/nodes/agent.ts";
@@ -12,6 +13,7 @@ import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { addWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
 import { loadWorkflows } from "../engine/workflows/load.ts";
 import { handleApi } from "../server/api.ts";
+import { type ChatRunner, createChatRunner } from "../server/chat.ts";
 import type { RequestRow } from "../server/queue.ts";
 import { renderRequests } from "../ui/view.ts";
 import { createDaemon, type Daemon } from "./daemon.ts";
@@ -28,7 +30,7 @@ beforeAll(() => {
 });
 
 type Msg = Record<string, unknown>;
-type Role = "implement" | "review" | "planner" | "verifier";
+type Role = "implement" | "review" | "planner" | "verifier" | "chat";
 type Call = { role: Role; prompt: string };
 type PlanItem = { key: string; title: string; contents: string; dependsOn: string[] };
 
@@ -52,6 +54,7 @@ const planItem = (key: string, dependsOn: string[] = []): PlanItem => ({
 });
 
 function roleOf(prompt: string): Role {
+  if (prompt.startsWith("# Role: chat")) return "chat";
   if (prompt.startsWith("# Role: planner")) return "planner";
   if (prompt.startsWith("# Role: verifier")) return "verifier";
   if (prompt.startsWith("# Role: reviewer")) return "review";
@@ -61,6 +64,7 @@ function roleOf(prompt: string): Role {
 let root: string;
 let db: DatabaseSync;
 let daemons: Daemon[];
+let runners: ChatRunner[];
 
 // Fake `query`: tells the role from the prompt and records every call. Planner and verifier must run in the root.
 function fakeQuery(calls: Call[], script: (call: Call, nth: number, cwd: string) => Msg[]): QueryFn {
@@ -69,7 +73,7 @@ function fakeQuery(calls: Call[], script: (call: Call, nth: number, cwd: string)
     const call = { role, prompt: params.prompt };
     calls.push(call);
     const nth = calls.filter((c) => c.role === role).length;
-    if (role === "planner" || role === "verifier") expect(params.options.cwd).toBe(root);
+    if (role === "planner" || role === "verifier" || role === "chat") expect(params.options.cwd).toBe(root);
     return (async function* () {
       for (const m of script(call, nth, params.options.cwd)) yield m;
     })();
@@ -86,8 +90,10 @@ beforeEach(() => {
   root = copyRepo(template);
   db = openDb(":memory:");
   daemons = [];
+  runners = [];
 });
 afterEach(async () => {
+  for (const r of runners) await r.stop();
   for (const d of daemons) await d.stop();
   db.close();
   removeCopies();
@@ -371,5 +377,60 @@ describe("request and verify workflows end to end", () => {
     expect(followUpParagraph?.[1]).toContain("Delivered");
     expect(after.html).not.toContain('data-action="continue"');
     expect(after.html).not.toContain("request-error");
+  }, 60_000);
+
+  it("queues the request a chat turn wrote and plans it like any other", async () => {
+    const calls: Call[] = [];
+    const query = fakeQuery(calls, (call, nth, cwd) => {
+      if (call.role === "chat") {
+        return [
+          result({
+            structured_output: {
+              reply: "Queued: Add a water log.",
+              request: { title: "Add a water log page", contents: "A page that logs glasses of water." },
+            },
+          }),
+        ];
+      }
+      if (call.role === "planner") return [planResult("one step", [planItem("one")])];
+      if (call.role === "verifier") return [planResult("all delivered", [])];
+      if (call.role === "review") return [result({ structured_output: { verdict: "approve", findings: [] } })];
+      commitFile(cwd, `impl-${nth}.txt`);
+      return [result()];
+    });
+    const daemon = makeDaemon(query);
+    const runner = createChatRunner({
+      db,
+      root,
+      stateDir: join(root, ".adaegg"),
+      appConfig: ConfigSchema.parse({ schema: 1, setup: "", checks: "true" }),
+      query,
+    });
+    runners.push(runner);
+
+    const res = handleApi(
+      db,
+      { method: "POST", path: "/api/chat", body: { text: "I want to log my water" } },
+      { chat: runner },
+    );
+    expect(res.status).toBe(202);
+    for (let i = 0; i < 500 && isChatBusy(db); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(isChatBusy(db)).toBe(false);
+
+    const request = listWorkItems(db).find((w) => w.kind === "request");
+    expect(request).toMatchObject({ title: "Add a water log page", contents: "A page that logs glasses of water." });
+    await settle(daemon);
+
+    const requestId = (request as { id: string }).id;
+    expect(seen(requestId).row.delivery?.state).toBe("delivered");
+    const state = handleApi(db, { method: "GET", path: "/api/state", body: undefined }).body as {
+      chat: { messages: { role: string; text: string; status: string; requestId: string | null }[]; busy: boolean };
+    };
+    expect(state.chat.busy).toBe(false);
+    expect(state.chat.messages.map((m) => [m.role, m.status, m.requestId])).toEqual([
+      ["user", "done", null],
+      ["assistant", "done", requestId],
+    ]);
+    expect(state.chat.messages[1]?.text).toBe("Queued: Add a water log.");
   }, 60_000);
 });

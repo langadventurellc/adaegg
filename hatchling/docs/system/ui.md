@@ -17,9 +17,10 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
 
 | Route | Body | Response |
 | --- | --- | --- |
-| `GET /api/state` | | 200 `{ name, queue }` (shapes below) |
+| `GET /api/state` | | 200 `{ name, queue, chat }` (shapes below) |
 | `POST /api/name` | `{ name }` | 200 `{ name }` with the cleaned name; 400 when the name is invalid |
 | `POST /api/ask` | `{ text }` | 201 `{ id, title }`: creates a work item of kind `request` |
+| `POST /api/chat` | `{ text }` | 202 `{ messageId, replyId }`: stores the message and starts the reply in the background; 400 for a bad `text` (same rules as `/api/ask`); 409 `Still answering your last message.` while a reply is pending; 503 `Chat is not available.` when the server has no chat runner |
 | `POST /api/items/<id>/retry` | `{}` | 200 `{ id, status }` with `status` `"queued"`; 404 unknown id; 409 when the item cannot be retried |
 | `POST /api/items/<id>/cancel` | `{}` | 200 `{ id, status }` with `status` `"cancelled"`; 404 unknown id; 409 when the item cannot be cancelled |
 | `POST /api/items/<id>/continue` | `{}` | 201 `{ id, title }` of the new follow-up request; 404 unknown id; 409 when the item is not an incomplete request, or was already continued |
@@ -30,6 +31,8 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
 `GET /api/state` shapes:
 
 - `name`: `string | null`, the stored name or `null` when none is set.
+- `chat.messages`: the last 50 chat messages, oldest first, each `{ id: number, role: "user" | "assistant", text, status: "pending" | "done" | "failed", requestId: string | null, requestTitle: string | null, createdAt }`. A failed reply holds the problem as its `text`; `requestId` links the reply to the request it queued.
+- `chat.busy`: `boolean`, true while a reply is pending.
 - `queue.counts`: an object with one `number` per status (every status is present, zero included).
 - `queue.requests`: an array of at most 20 rows, newest first. They are the top-level items (no parent) of kind `request` or `item`. Each row is:
   - `id: string`, the full id.
@@ -44,6 +47,12 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
   - `followUp: { id, title, status, blockedBy, progress, delivery } | null`: the live follow-up of an incomplete request, found by `followUpOf` in `followup.ts`; `progress` and `delivery` are computed from the follow-up's own children like the row's. It is `null` when there is none, when it failed or was cancelled, and always for a row of kind `item`. It never changes the row's own `delivery`, `progress`, `status` or `error`.
 
 Anything asked through `/api/ask` is a `request`, which the daemon plans into items and verifies (see [workflows](workflows.md)), so the user never writes a spec.
+
+## Chat
+
+`POST /api/chat` is a conversation with the hatchling that ends in one well-written `request`. There is one thread (the `chat_messages` table, `src/engine/chat.ts`) and one turn at a time: while a reply is pending a second message is refused with 409. The runner (`src/server/chat.ts`, see [agents](agents.md)) lives in the daemon process and runs the turn outside the run queue: a queued work item would wait behind a build for minutes, and a chat reply must come back in seconds. A turn that was still pending when the daemon stopped is failed at daemon start (`failInterruptedTurns`, called only from `src/daemon/main.ts`, never by the CLI). The agent either queues a request it wrote (an ordinary `request` work item, see [queue](queue.md)) or replies with questions.
+
+`POST /api/ask` stays the direct route: its raw text becomes the request as it is. Outside agents use it.
 
 ## The guard
 
@@ -86,6 +95,7 @@ Software built for the user lives in pages. The registry is `PAGES` in `src/ui/p
 | `src/ui/client.ts` | The typed API client (`ApiError`, `UnreachableError`). |
 | `src/ui/starters.ts` | `STARTER_REQUESTS` and `pickStarters`. |
 | `src/ui/style.css` | All styling. |
+| `src/server/chat.ts` | The chat runner: runs one read-only agent turn in the background and stores its reply (see Chat). |
 
 To change the starter requests, edit `STARTER_REQUESTS` in `src/ui/starters.ts` (keep 10 to 12 single-line entries of at most 120 characters). To change the look, edit `src/ui/style.css`; it uses CSS system colours so it follows the user's light or dark theme.
 
