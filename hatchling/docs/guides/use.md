@@ -15,13 +15,13 @@ Prefer an item when you can write the spec; a request spends an extra planning r
 
 ## Ask in the browser
 
-The browser is another way to ask. Open the URL from `hatch status` (the `ui` line). Anything asked there becomes a `request` that the daemon plans, like `hatch add --kind request`. See [ui](../system/ui.md).
+The browser is another way to ask, and it is a chat with your hatchling. Open the URL from `hatch status` (the `ui` line). When your ask is clear, the hatchling queues one request for it right away and says what it queued; otherwise it asks a short question first. A queued request becomes a `request` that the daemon plans, like `hatch add --kind request`, and its card in the chat shows its status. `hatch add` and `POST /api/ask` queue your raw text without a chat. See [ui](../system/ui.md).
 
 The first visit goes like this:
 
 1. Run `hatch status` and open the URL on its `ui` line.
 2. Name the hatchling: accept the suggested name or ask for another, then choose it.
-3. Ask: type what you want, or pick a starter, and press Ask. The request appears in "Your requests" with its status.
+3. Chat: type what you want, or pick a starter, and press Send (or Enter). The reply says what was queued, and the request's card appears in the chat with its status.
 
 ## Write a good item
 
