@@ -45,9 +45,9 @@ The repository is local only. Nothing is pushed anywhere. You may add your own r
 
 ## How a request becomes software
 
-Everything you ask becomes a *request*. A planner agent splits it into a chain of items, and each item goes through the `implement` workflow. A verification then checks the result. What you ask for shows up as a page under "Your pages" on the Ask screen.
+Everything you ask becomes a *request*. In the browser you chat with your hatchling: when your ask is clear it queues one request right away, and otherwise it asks a short question first. From the terminal you queue a request yourself. A planner agent splits the request into a chain of items, and each item goes through the `implement` workflow. A verification then checks the result. What you ask for shows up as a page under "Your pages" on the Ask screen.
 
-- request: what you typed in the UI
+- request: what the chat agent writes from your conversation, or what you queue from the terminal
   - plan: a planner agent splits it into a chain of items
   - for each item (the `implement` workflow):
     - branch in a git worktree
@@ -74,6 +74,7 @@ Read this before you ask for anything.
 - Agents act with your own permissions, in your hatchling's repository. They can read and write files, run `npm`, `npx`, `node`, `git` (no push or remote changes), `ls`, `mkdir` and the `hatch` script (`hatchling/bin/hatch` in the template) in Bash, and fetch and search the web. Only those commands are approved; everything else in Bash is denied. This is not a sandbox: `npm`, `npx` and `node` can run arbitrary code with your permissions, so the deny rules for git push and remotes stop the usual forms of those commands but are not a guarantee against remote changes. The exact list is in [hatchling/docs/system/agents.md](hatchling/docs/system/agents.md) and `hatchling/workflows/implement.yaml`.
 - The UI listens on 127.0.0.1 only and has no login. Anyone who can reach 127.0.0.1 on your machine can queue work.
 - Every request spends your own Claude usage: a planning run, one implement and review run per item, and a verification for plans with more than one item. Per-run caps exist (for example, an implement run is capped at 150 turns and about 10 US dollars), but they are the SDK's estimates and can overshoot. A large request can cost a lot.
+- Every chat message spends a short read-only Claude turn on the model set in `models.chat`, capped at 12 turns and about 0.5 US dollars. The chat agent can read your repository and queue requests, but it cannot change files.
 - Review what lands in the repo's git history. Agents make mistakes, and their checks and reviews are not a guarantee.
 - The supervisor reverts a merge that stops the hatchling from starting (see [hatchling/docs/system/restart-and-rollback.md](hatchling/docs/system/restart-and-rollback.md)). It cannot judge whether a change is a good idea.
 

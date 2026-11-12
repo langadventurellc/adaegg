@@ -1,3 +1,4 @@
+import type { ChatMessage } from "../engine/chat.ts";
 import type { NameEntry } from "../names/names.ts";
 import type { Delivery, FollowUp, RequestRow } from "../server/queue.ts";
 
@@ -133,7 +134,7 @@ function renderDeliveryRow(row: RequestRow, delivery: Delivery): string {
   return parts.join("");
 }
 
-function renderRow(row: RequestRow): string {
+export function renderRequestCard(row: RequestRow): string {
   if (row.delivery !== null) return renderDeliveryRow(row, row.delivery);
   const id = escapeHtml(row.id);
   const progress = progressLabel(row.progress);
@@ -158,7 +159,48 @@ export function renderRequests(rows: RequestRow[]): string {
   if (rows.length === 0) {
     return '<ul class="requests" aria-live="polite"><li class="empty">No requests yet. Ask for something above.</li></ul>';
   }
-  return `<ul class="requests" aria-live="polite">${rows.map(renderRow).join("")}</ul>`;
+  return `<ul class="requests" aria-live="polite">${rows.map(renderRequestCard).join("")}</ul>`;
+}
+
+const WELCOME = "Tell me what you want and I'll build it, or ask me about what you already have.";
+
+function renderMessage(message: ChatMessage, rows: RequestRow[]): string {
+  let body: string;
+  if (message.role === "assistant" && message.status === "pending") {
+    body = '<p class="message-text">Thinking…</p>';
+  } else if (message.status === "failed") {
+    body = `<p class="message-text message-error">${escapeHtml(message.text)}</p>`;
+  } else {
+    body = `<p class="message-text">${escapeHtml(message.text)}</p>`;
+  }
+  let card = "";
+  if (message.role === "assistant" && message.requestId !== null) {
+    const row = rows.find((r) => r.id === message.requestId);
+    card =
+      row === undefined
+        ? `<p class="request-earlier">Earlier request: ${escapeHtml(message.requestTitle ?? "")}</p>`
+        : `<ul class="requests">${renderRequestCard(row)}</ul>`;
+  }
+  return `<li class="message message-${message.role}" data-status="${escapeHtml(message.status)}">${body}${card}</li>`;
+}
+
+export function renderThread(messages: ChatMessage[], rows: RequestRow[]): string {
+  if (messages.length === 0) return `<ol class="thread"><li class="empty">${escapeHtml(WELCOME)}</li></ol>`;
+  return `<ol class="thread">${messages.map((m) => renderMessage(m, rows)).join("")}</ol>`;
+}
+
+function unreferencedRows(messages: ChatMessage[], rows: RequestRow[]): RequestRow[] {
+  const referenced = new Set(messages.map((m) => m.requestId).filter((id) => id !== null));
+  return rows.filter((row) => !referenced.has(row.id));
+}
+
+export function hasOtherRequests(messages: ChatMessage[], rows: RequestRow[]): boolean {
+  return unreferencedRows(messages, rows).length > 0;
+}
+
+export function renderOtherRequests(messages: ChatMessage[], rows: RequestRow[]): string {
+  const other = unreferencedRows(messages, rows);
+  return other.length === 0 ? "" : renderRequests(other);
 }
 
 export function renderOnboarding(input: {
@@ -192,7 +234,10 @@ export function renderAsk(input: {
   starters: readonly string[];
   requests?: RequestRow[];
   pages?: readonly { id: string; title: string }[];
+  chat?: { messages: ChatMessage[]; busy: boolean };
 }): string {
+  const chat = input.chat ?? { messages: [], busy: false };
+  const rows = input.requests ?? [];
   const pages = input.pages ?? [];
   const yourPages =
     pages.length === 0
@@ -213,19 +258,19 @@ export function renderAsk(input: {
     .join("");
   return [
     `<h1>Ask ${escapeHtml(input.name)}</h1>`,
+    `<div id="thread">${renderThread(chat.messages, rows)}</div>`,
     '<form id="ask-form">',
-    '<label for="ask-text">What would you like it to do?</label>',
-    '<textarea id="ask-text" name="text" rows="4"></textarea>',
-    '<button type="submit" class="primary">Ask</button>',
+    '<label for="ask-text" class="visually-hidden">What would you like it to do?</label>',
+    '<textarea id="ask-text" name="text" rows="3" placeholder="What would you like it to do?"></textarea>',
+    `<button type="submit" class="primary"${chat.busy ? " disabled" : ""}>Send</button>`,
     "</form>",
-    '<section class="starters">',
-    "<h2>Not sure where to start?</h2>",
-    starters,
-    "</section>",
+    chat.messages.length === 0
+      ? `<section class="starters"><h2>Not sure where to start?</h2>${starters}</section>`
+      : "",
     yourPages,
-    '<section class="your-requests">',
-    "<h2>Your requests</h2>",
-    `<div id="requests">${renderRequests(input.requests ?? [])}</div>`,
+    `<section class="other-requests"${hasOtherRequests(chat.messages, rows) ? "" : " hidden"}>`,
+    "<h2>Other requests</h2>",
+    `<div id="other-requests">${renderOtherRequests(chat.messages, rows)}</div>`,
     "</section>",
     '<button type="button" class="small" data-action="rename">Change name</button>',
   ].join("");

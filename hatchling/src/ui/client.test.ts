@@ -25,6 +25,34 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+describe("chat", () => {
+  it("posts JSON text to /api/chat and returns the ids", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fake = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ messageId: 1, replyId: 2 }), { status: 202 });
+    }) as unknown as typeof fetch;
+    const res = await createClient("http://x", fake).chat("hello");
+    expect(res).toEqual({ messageId: 1, replyId: 2 });
+    expect(calls[0]?.url).toBe("http://x/api/chat");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(JSON.parse(calls[0]?.init.body as string)).toEqual({ text: "hello" });
+  });
+
+  it("throws an ApiError carrying the 409 message", async () => {
+    const fake = (async () =>
+      new Response(JSON.stringify({ error: "Still answering your last message." }), {
+        status: 409,
+      })) as unknown as typeof fetch;
+    const err = await createClient("http://x", fake)
+      .chat("again")
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(409);
+    expect(err.message).toBe("Still answering your last message.");
+  });
+});
+
 describe("createClient against the real server", () => {
   it("getState returns no name before setName and the name after", async () => {
     expect((await client.getState()).name).toBeNull();

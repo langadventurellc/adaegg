@@ -8,23 +8,30 @@ import {
   anotherSuggestion,
   applyFetchResult,
   applyUnreachable,
+  type ChatState,
+  canSend,
   type FetchResult,
   initialSession,
+  isSendKey,
   nameSaved,
+  pollDelayMs,
   type Session,
+  scrollsToEnd,
   setError,
   setValue,
   startRename,
 } from "./state.ts";
 import {
+  hasOtherRequests,
   RESTARTING_MESSAGE,
   renderAsk,
   renderBanner,
   renderNotFound,
   renderOnboarding,
+  renderOtherRequests,
   renderPageError,
   renderPageHeader,
-  renderRequests,
+  renderThread,
   routeFor,
   screenFor,
 } from "./view.ts";
@@ -32,7 +39,6 @@ import {
 // A thin shell: every decision and every piece of markup comes from the tested pure modules
 // (state.ts, view.ts, starters.ts, client.ts). Nothing here is covered by tests (no DOM environment).
 
-const POLL_MS = 3000;
 const app = document.querySelector<HTMLElement>("#app");
 const client = createClient("");
 const starters = pickStarters(Math.random);
@@ -59,9 +65,34 @@ function renderBannerSlot(): void {
   if (slot) slot.innerHTML = bannerHtml();
 }
 
-function renderRequestsSlot(): void {
-  const slot = document.querySelector("#requests");
-  if (slot) slot.innerHTML = renderRequests(session.rows);
+let shownMessages: ChatState["messages"] = [];
+
+function atBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+}
+
+// Swaps only the thread, the other requests and the Send button; the form is never replaced,
+// so a draft and focus survive.
+function renderAskSlots(): void {
+  const { messages, busy } = session.chat;
+  const thread = document.querySelector<HTMLElement>("#thread");
+  if (thread) {
+    const wasAtBottom = atBottom(thread);
+    const top = thread.scrollTop;
+    thread.innerHTML = renderThread(messages, session.rows);
+    thread.scrollTop = scrollsToEnd(shownMessages, messages, wasAtBottom) ? thread.scrollHeight : top;
+  }
+  shownMessages = messages;
+  const other = document.querySelector<HTMLElement>("#other-requests");
+  if (other) {
+    other.innerHTML = renderOtherRequests(messages, session.rows);
+    const section = other.parentElement;
+    if (section) section.hidden = !hasOtherRequests(messages, session.rows);
+  }
+  const starters = document.querySelector<HTMLElement>(".starters");
+  if (starters) starters.hidden = messages.length > 0;
+  const send = document.querySelector<HTMLButtonElement>("#ask-form button[type=submit]");
+  if (send) send.disabled = busy;
 }
 
 // Onboarding wins over the hash; the route only matters on the ask screen.
@@ -102,12 +133,22 @@ function fullRender(): void {
     body = renderNotFound(name);
   } else {
     title = `Ask ${name}`;
-    body = renderAsk({ name, starters, requests: session.rows, pages: PAGES });
+    body = renderAsk({ name, starters, requests: session.rows, pages: PAGES, chat: session.chat });
   }
+  const oldThread = document.querySelector<HTMLElement>("#thread");
+  const oldTop = oldThread ? oldThread.scrollTop : 0;
+  const oldAtBottom = oldThread ? atBottom(oldThread) : true;
   app.innerHTML = `<div id="banner">${bannerHtml()}</div><main>${body}</main>`;
   document.title = title;
   shownScreen = view;
   shownSuggestion = s.suggestion !== null;
+  const thread = document.querySelector<HTMLElement>("#thread");
+  if (thread) {
+    // A fresh thread starts at its newest message; a re-render keeps the reader's place.
+    const end = !oldThread || scrollsToEnd(shownMessages, session.chat.messages, oldAtBottom);
+    thread.scrollTop = end ? thread.scrollHeight : oldTop;
+  }
+  shownMessages = session.chat.messages;
   const root = document.querySelector<HTMLElement>("#page-root");
   if (page && root) {
     try {
@@ -125,8 +166,8 @@ function render(): void {
   if (currentView() !== shownScreen || lateSuggestion) fullRender();
   else {
     renderBannerSlot();
-    // Only the Ask screen has the requests list; a page's own DOM is never touched by a poll.
-    if (shownScreen === "ask") renderRequestsSlot();
+    // Only the Ask screen has the thread; a page's own DOM is never touched by a poll.
+    if (shownScreen === "ask") renderAskSlots();
   }
 }
 
@@ -220,23 +261,33 @@ async function runAction(call: () => Promise<unknown>): Promise<void> {
   renderBannerSlot();
 }
 
+// Sends one chat message; resolves true when the server accepted it.
+async function sendChat(text: string): Promise<boolean> {
+  let sent = false;
+  await runAction(async () => {
+    await client.chat(text);
+    sent = true;
+  });
+  return sent;
+}
+
 async function submitAsk(form: HTMLFormElement): Promise<void> {
   const textarea = form.querySelector<HTMLTextAreaElement>("#ask-text");
   const text = textarea?.value.trim() ?? "";
-  if (text === "") {
+  if (!canSend(text, session.chat.busy)) {
     textarea?.focus();
     return;
   }
   const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
-  await withDisabled(button, async () => {
-    let asked = false;
-    await runAction(async () => {
-      await client.ask(text);
-      asked = true;
-    });
-    if (asked && textarea) textarea.value = "";
+  if (button) button.disabled = true;
+  try {
+    const sent = await sendChat(text);
+    if (sent && textarea) textarea.value = "";
     textarea?.focus();
-  });
+  } finally {
+    // Send follows the chat state: disabled while a reply is pending.
+    if (button) button.disabled = session.chat.busy;
+  }
 }
 
 async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel" | "continue"): Promise<void> {
@@ -262,11 +313,8 @@ app?.addEventListener("click", (event) => {
       break;
     }
     case "starter": {
-      const textarea = document.querySelector<HTMLTextAreaElement>("#ask-text");
-      if (textarea) {
-        textarea.value = button.dataset.text ?? "";
-        textarea.focus();
-      }
+      const text = (button.dataset.text ?? "").trim();
+      if (canSend(text, session.chat.busy)) void sendChat(text);
       break;
     }
     case "retry":
@@ -284,9 +332,20 @@ app?.addEventListener("submit", (event) => {
   else if (form.id === "ask-form") void submitAsk(form);
 });
 
-setInterval(() => {
-  if (!document.hidden) void refresh(false, true);
-}, POLL_MS);
+app?.addEventListener("keydown", (event) => {
+  const target = event.target as HTMLElement | null;
+  if (target?.id !== "ask-text") return;
+  if (!isSendKey({ key: event.key, shiftKey: event.shiftKey, isComposing: event.isComposing })) return;
+  event.preventDefault();
+  target.closest("form")?.requestSubmit();
+});
+
+function schedulePoll(): void {
+  setTimeout(async () => {
+    if (!document.hidden) await refresh(false, true);
+    schedulePoll();
+  }, pollDelayMs(session));
+}
 
 window.addEventListener("hashchange", () => {
   // Before the first state arrives there is nothing to draw; the first render picks up the hash.
@@ -300,4 +359,5 @@ document.addEventListener("visibilitychange", () => {
 void refresh(false, true).then(() => {
   // The first render is always a full one, whatever the screen is.
   if (shownScreen === null) fullRender();
+  schedulePoll();
 });
