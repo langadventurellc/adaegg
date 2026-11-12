@@ -12,11 +12,12 @@ import {
 import type { Config } from "../engine/config.ts";
 import { AUTH_PATTERN, lastJsonBlock, type QueryFn, transcriptLines } from "../engine/nodes/agent.ts";
 import { listWorkItems } from "../engine/store.ts";
-import { summarizeQueue } from "./queue.ts";
+import { type Delivery, summarizeQueue } from "./queue.ts";
 
 const DEFAULT_TIMEOUT_MS = 3 * 60 * 1000;
 const QUEUE_ROWS = 20;
 const ERROR_CHARS = 300;
+const ATTENTION_ERROR_CHARS = 800;
 
 export const CHAT_SIGNED_OUT =
   "Claude isn't signed in. Run `claude` once to log in, or set ANTHROPIC_API_KEY, then send your message again.";
@@ -75,13 +76,53 @@ function conversationLine(m: ChatContextMessage): string {
   return `Assistant: ${m.text}${note}`;
 }
 
+function attentionLine(delivery: Delivery, nested = false): string | null {
+  const attention = delivery.attention;
+  if (attention === null) return null;
+  const flattened = attention.error?.replace(/[\r\n]+/g, " ");
+  const error =
+    flattened === undefined
+      ? null
+      : flattened.length > ATTENTION_ERROR_CHARS
+        ? `${flattened.slice(0, ATTENTION_ERROR_CHARS - 1)}…`
+        : flattened;
+  let fact: string;
+  if (delivery.state === "incomplete") {
+    fact = `incomplete: the last verification found missing work${error === null ? " (no reason recorded)" : `: ${error}`}`;
+  } else if (delivery.state === "failed") {
+    fact = `request failed${error === null ? " (no reason recorded)" : `: ${error}`}`;
+  } else if (delivery.state === "cancelled") {
+    fact = "request was cancelled";
+  } else {
+    fact = `needs attention: step ${attention.id.slice(0, 8)} "${attention.title}" ${error === null ? "was cancelled" : `failed: ${error}`}`;
+  }
+  const recovery =
+    attention.action === "ask-again"
+      ? '"Ask for the rest" queues a continuation request.'
+      : nested
+        ? "Retry it in its own row."
+        : delivery.state === "failed" || delivery.state === "cancelled"
+          ? "Retry that request."
+          : "Retry that step.";
+  return `${nested ? "    " : "  "}${fact}. Recovery: ${recovery}`;
+}
+
 function queueLines(db: DatabaseSync): string {
   const rows = summarizeQueue(listWorkItems(db)).requests.slice(0, QUEUE_ROWS);
   if (rows.length === 0) return "(empty)";
   return rows
     .map((r) => {
-      const error = r.error ? ` - ${r.error.slice(0, ERROR_CHARS)}` : "";
-      return `${r.id.slice(0, 8)} "${r.title}" ${r.delivery?.state ?? r.status}${error}`;
+      const error = !r.delivery?.attention && r.error ? ` - ${r.error.slice(0, ERROR_CHARS)}` : "";
+      const lines = [`${r.id.slice(0, 8)} "${r.title}" ${r.delivery?.state ?? r.status}${error}`];
+      const attention = r.delivery ? attentionLine(r.delivery) : null;
+      if (attention !== null) lines.push(attention);
+      if (r.followUp !== null) {
+        const followUp = r.followUp;
+        lines.push(`  continued as request ${followUp.id.slice(0, 8)} "${followUp.title}": ${followUp.delivery.state}`);
+        const followUpAttention = attentionLine(followUp.delivery, true);
+        if (followUpAttention !== null) lines.push(followUpAttention);
+      }
+      return lines.join("\n");
     })
     .join("\n");
 }
