@@ -75,7 +75,7 @@ The chat agent (`src/server/chat.ts`, role text in `prompts/chat.md`) turns what
 
 - **Model:** `models.chat` (default `sonnet`).
 - **Tools:** `Read`, `Glob`, `Grep`, `Bash(git log*)`, `Bash(git show*)`, `Bash(git diff*)`, `Bash(git status*)` and `Bash(ls *)`, with `permissionMode: 'dontAsk'`, `settingSources: ['project']`, `maxTurns: 12` and `maxBudgetUsd: 0.5`. It runs with `cwd: root`, so the Read-only rule above applies: no `Write`, `Edit` or bare `Bash`.
-- **Prompt:** the role text, the earlier conversation, a digest of up to 20 queue rows (so the agent needs no `hatch` command) and the latest message.
+- **Prompt:** the role text, the earlier conversation, a digest of up to 20 queue rows (so the agent needs no `hatch` command) and the latest message. Per request, the digest carries attention detail from the same `delivery.attention` the request card uses: the failing step, error cut to an 800-character cap (with a trailing `…` when cut and newlines flattened), and recovery action, plus a continuation line and its own attention detail when present.
 - **Output:** structured output `{ reply, request? }` (else the last fenced `json` block), validated with Zod. A valid `request` is queued with the reply in one transaction. Invalid or missing output fails the turn.
 - **Sign-in:** detected as in the agent node (an `authentication_failed` assistant message, or an error result matching the same pattern); the turn fails with sign-in guidance. The runner handles no credentials.
 - **Time and stop:** a turn is aborted after 3 minutes, or when the server stops, and is failed with a message that says so.
