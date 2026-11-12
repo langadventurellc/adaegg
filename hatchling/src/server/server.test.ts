@@ -134,6 +134,39 @@ describe("createUiServer", () => {
     expect(plain.status).toBe(415);
   });
 
+  it("guards POST /api/chat like the other writes", async () => {
+    const { url } = await begin();
+    const plain = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "hi",
+    });
+    expect(plain.status).toBe(415);
+    const foreign = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, origin: "http://evil.example" },
+      body: JSON.stringify({ text: "x" }),
+    });
+    expect(foreign.status).toBe(403);
+  });
+
+  it("starts a chat reply through POST /api/chat and stops the runner on stop", async () => {
+    const chat = { start: vi.fn(), stop: vi.fn(async () => {}) };
+    const server = createUiServer({ db: db(), root: ".", port: 0, vite: false, chat });
+    servers.push(server);
+    const { url } = await server.start();
+    const res = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ text: "hello" }),
+    });
+    expect(res.status).toBe(202);
+    const { replyId } = (await res.json()) as { replyId: number };
+    expect(chat.start).toHaveBeenCalledExactlyOnceWith(replyId);
+    await server.stop();
+    expect(chat.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("answers 404 for other paths without Vite", async () => {
     const { url } = await begin();
     expect((await fetch(`${url}/`)).status).toBe(404);

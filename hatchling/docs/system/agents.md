@@ -69,6 +69,18 @@ The engine never handles credentials. No code reads, writes, logs, stores, promp
 
 Each attempt appends JSON lines to `<state dir>/logs/<first 8 characters of the run id>/<node id>-<attempt>.jsonl`: one line per assistant text, tool use (`name`, `input`) and tool result. Tool input and output are cut at 2000 characters. The attempt is the node's attempt number in the run.
 
+## Chat agent
+
+The chat agent (`src/server/chat.ts`, role text in `prompts/chat.md`) turns what the user says into one request. It is not a workflow node and is not queued: a turn runs in the UI server process, so it never waits behind a build. `createChatRunner({ db, root, stateDir, appConfig, query })` takes the SDK's `query` as a parameter, as the agent node does.
+
+- **Model:** `models.chat` (default `sonnet`).
+- **Tools:** `Read`, `Glob`, `Grep`, `Bash(git log*)`, `Bash(git show*)`, `Bash(git diff*)`, `Bash(git status*)` and `Bash(ls *)`, with `permissionMode: 'dontAsk'`, `settingSources: ['project']`, `maxTurns: 12` and `maxBudgetUsd: 0.5`. It runs with `cwd: root`, so the Read-only rule above applies: no `Write`, `Edit` or bare `Bash`.
+- **Prompt:** the role text, the earlier conversation, a digest of up to 20 queue rows (so the agent needs no `hatch` command) and the latest message.
+- **Output:** structured output `{ reply, request? }` (else the last fenced `json` block), validated with Zod. A valid `request` is queued with the reply in one transaction. Invalid or missing output fails the turn.
+- **Sign-in:** detected as in the agent node (an `authentication_failed` assistant message, or an error result matching the same pattern); the turn fails with sign-in guidance. The runner handles no credentials.
+- **Time and stop:** a turn is aborted after 3 minutes, or when the server stops, and is failed with a message that says so.
+- **Transcript and cost:** JSON lines in `<state dir>/logs/chat/<reply id>.jsonl`, cut as for agent transcripts; the `tidy` workflow's log cleanup removes old directories under `logs/`. The turn's cost is stored on the reply message (`cost_usd`).
+
 ## Commit guard
 
 With `commit: true`, after the agent reports `done` the node checks the worktree. If `git status --porcelain` is not empty it runs `git add -A` and commits with `hatch: <title> (<id8>)`. If `git rev-list --count --no-merges <base>..HEAD` is 0, so the branch has no commits of its own (merging an advanced base into an untouched branch adds none, and commits already in base do not count), the outcome is `failed` with the problem `the implement step made no changes`. Running the node twice is safe: a clean worktree makes no commit. The guard does not clear `checkOutput`, `findings` or `conflictFiles`.

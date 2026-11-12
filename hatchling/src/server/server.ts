@@ -5,7 +5,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { handleApi } from "./api.ts";
 import { checkRequest, MAX_BODY_BYTES } from "./guard.ts";
 
-export type UiServerOptions = { db: DatabaseSync; root: string; port: number; vite?: boolean };
+export type UiServerOptions = {
+  db: DatabaseSync;
+  root: string;
+  port: number;
+  vite?: boolean;
+  chat?: { start(replyId: number): void; stop(): Promise<void> };
+};
 export type UiServer = { start(): Promise<{ url: string; port: number }>; stop(): Promise<void> };
 
 const HOST = "127.0.0.1";
@@ -98,7 +104,7 @@ export function createUiServer(opts: UiServerOptions): UiServer {
           }
         }
       }
-      const out = handleApi(opts.db, { method, path: pathname, body });
+      const out = handleApi(opts.db, { method, path: pathname, body }, opts.chat ? { chat: opts.chat } : undefined);
       sendJson(res, out.status, out.body);
       return;
     }
@@ -221,6 +227,7 @@ export function createUiServer(opts: UiServerOptions): UiServer {
 
   function stop(): Promise<void> {
     stopping ??= (async () => {
+      await opts.chat?.stop();
       if (vite) await vite.close();
       server.closeAllConnections();
       destroySockets();

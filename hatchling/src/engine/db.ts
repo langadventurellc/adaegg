@@ -60,6 +60,16 @@ export const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (page, key)
   );`,
+  `CREATE TABLE chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    text TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'failed')),
+    request_id TEXT REFERENCES work_items(id),
+    cost_usd REAL,
+    created_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX chat_one_pending ON chat_messages (role, status) WHERE role = 'assistant' AND status = 'pending';`,
 ];
 
 export function openDb(path: string): DatabaseSync {

@@ -141,7 +141,10 @@ describe("agent node options", () => {
   it("looks the model alias up in appConfig.models", async () => {
     const { ctx } = setup();
     const captured: Captured = {};
-    const withModels = { ...ctx, appConfig: { ...ctx.appConfig, models: { implement: "opus", review: "haiku" } } };
+    const withModels = {
+      ...ctx,
+      appConfig: { ...ctx.appConfig, models: { implement: "opus", review: "haiku", chat: "sonnet" } },
+    };
     await runAgent(withModels, fake([success()], captured));
     expect(captured.options?.model).toBe("opus");
   });

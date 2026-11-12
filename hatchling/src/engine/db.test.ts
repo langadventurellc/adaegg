@@ -48,12 +48,27 @@ describe("openDb", () => {
   it("works on :memory:", () => {
     const db = openDb(":memory:");
     expect(pragma(db, "user_version").user_version).toBe(MIGRATIONS.length);
-    expect(MIGRATIONS.length).toBe(6);
+    expect(MIGRATIONS.length).toBe(7);
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
     const names = tables.map((t) => t.name);
     expect(names).toContain("runs");
     expect(names).toContain("node_runs");
     expect(names).toContain("page_data");
+    expect(names).toContain("chat_messages");
+    db.close();
+  });
+
+  it("constrains chat_messages roles and statuses", () => {
+    const db = openDb(":memory:");
+    const insert = (role: string, status: string) =>
+      db
+        .prepare("INSERT INTO chat_messages (role, text, status, created_at) VALUES (?, 't', ?, 'x')")
+        .run(role, status);
+    expect(() => insert("system", "done")).toThrow();
+    expect(() => insert("user", "weird")).toThrow();
+    expect(() => insert("user", "done")).not.toThrow();
+    insert("assistant", "pending");
+    expect(() => insert("assistant", "pending")).toThrow();
     db.close();
   });
 });

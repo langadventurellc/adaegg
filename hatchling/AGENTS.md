@@ -4,13 +4,13 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 
 ## Layout
 
-- `src/engine/`: paths, config, database, page data store (`page-data.ts`), queue store, run store, runner, workflow loader and node types (`nodes/`).
+- `src/engine/`: paths, config, database, page data store (`page-data.ts`), the stored chat thread (`chat.ts`), queue store, run store, runner, workflow loader and node types (`nodes/`).
 - `src/daemon/`: the daemon (`daemon.ts`) and its entry point (`main.ts`).
 - `src/supervisor/`: the supervisor behind `hatch start`.
 - `src/cli/`: the `hatch` CLI.
 - `workflows/`: workflow YAML files, loaded at daemon start.
 - `prompts/`: the role prompts the agent nodes send.
-- `src/server/`: the local UI server: guard, API, queue summary and Vite middleware.
+- `src/server/`: the local UI server: guard, API, queue summary, the chat runner (`chat.ts`) and Vite middleware.
 - `src/ui/`: the browser UI (onboarding and Ask screens, plain TypeScript), served by `src/server/`.
 - `src/ui/pages/`: the pages built for the user: one folder per page with its pure logic and tests, registered in `PAGES` in `src/ui/pages/index.ts`.
 - `src/names/`: the names list, the suggestion picker and name validation for onboarding.
