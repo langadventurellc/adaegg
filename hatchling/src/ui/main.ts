@@ -271,11 +271,15 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
     return;
   }
   const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
-  await withDisabled(button, async () => {
+  if (button) button.disabled = true;
+  try {
     const sent = await sendChat(text);
     if (sent && textarea) textarea.value = "";
     textarea?.focus();
-  });
+  } finally {
+    // Send follows the chat state: disabled while a reply is pending.
+    if (button) button.disabled = session.chat.busy;
+  }
 }
 
 async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel" | "continue"): Promise<void> {
