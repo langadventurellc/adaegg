@@ -8,7 +8,7 @@ import { createUiServer, type UiServer, type UiServerOptions } from "./server.ts
 const servers: UiServer[] = [];
 
 async function begin(port = 0, extra: Partial<UiServerOptions> = {}) {
-  const server = createUiServer({ db: db(), root: ".", port, vite: false, ...extra });
+  const server = createUiServer({ root: ".", port, vite: false, ...extra, db: extra.db ?? db() });
   servers.push(server);
   return { server, ...(await server.start()) };
 }
@@ -22,8 +22,13 @@ function heldChat() {
   return { chat: { start: vi.fn(), stop: () => gate }, release };
 }
 
+const opened: ReturnType<typeof openDb>[] = [];
+
+// Every handle is closed after the servers stop; stop() does not own database cleanup.
 function db() {
-  return openDb(":memory:");
+  const handle = openDb(":memory:");
+  opened.push(handle);
+  return handle;
 }
 
 const JSON_HEADERS = { "content-type": "application/json" };
@@ -53,6 +58,7 @@ function refused(port: number) {
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(servers.splice(0).map((s) => s.stop()));
+  for (const handle of opened.splice(0)) handle.close();
 });
 
 describe("createUiServer shutdown", () => {
