@@ -134,6 +134,60 @@ describe("chat runner", () => {
     );
   });
 
+  const costOf = (id: number) =>
+    (db.prepare("SELECT cost_usd FROM chat_messages WHERE id = ?").get(id) as { cost_usd: number | null }).cost_usd;
+
+  it("fails, queues nothing and keeps the cost when the stream throws after a valid result", async () => {
+    const query = fakeQuery([], () =>
+      (async function* () {
+        yield result({
+          structured_output: { reply: "Queued.", request: { title: "Add a page", contents: "A page." } },
+        });
+        throw new Error("process exited with code 1");
+      })(),
+    );
+    const { message, replyId } = await turn(query);
+    expect(message.status).toBe("failed");
+    expect(message.text).toBe("process exited with code 1");
+    expect(message.requestId).toBeNull();
+    expect(listWorkItems(db)).toHaveLength(0);
+    expect(costOf(replyId)).toBe(0.02);
+  });
+
+  it("keeps the reported cost on invalid output and non-success results", async () => {
+    const a = await turn(fakeQuery([], () => [result({ total_cost_usd: 0.07 })]));
+    expect(a.message.status).toBe("failed");
+    expect(costOf(a.replyId)).toBe(0.07);
+    const b = await turn(
+      fakeQuery([], () => [result({ subtype: "error_max_turns", is_error: true, total_cost_usd: 0.31 })]),
+    );
+    expect(costOf(b.replyId)).toBe(0.31);
+    expect(listWorkItems(db)).toHaveLength(0);
+  });
+
+  it("keeps the reported cost on an authentication failure result", async () => {
+    const { message, replyId } = await turn(
+      fakeQuery([], () => [
+        result({ is_error: true, subtype: "error_during_execution", result: "Not logged in", total_cost_usd: 0.01 }),
+      ]),
+    );
+    expect(message.text).toContain("isn't signed in");
+    expect(costOf(replyId)).toBe(0.01);
+  });
+
+  it("keeps the cost when the turn is aborted after a result arrived", async () => {
+    const query = fakeQuery([], (call) =>
+      (async function* () {
+        yield result({ total_cost_usd: 0.04, structured_output: { reply: "ok" } });
+        const signal = (call.options.abortController as AbortController).signal;
+        await new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted"))));
+      })(),
+    );
+    const { message, replyId } = await turn(query, "hello", { timeoutMs: 30 });
+    expect(message.status).toBe("failed");
+    expect(costOf(replyId)).toBe(0.04);
+  });
+
   it("fails with the subtype for error_max_turns", async () => {
     const { message } = await turn(fakeQuery([], () => [result({ subtype: "error_max_turns", is_error: true })]));
     expect(message.status).toBe("failed");

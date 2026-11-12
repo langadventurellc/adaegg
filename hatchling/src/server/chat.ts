@@ -110,7 +110,8 @@ export function createChatRunner(opts: Options): ChatRunner {
 
   async function runTurn(replyId: number, abortController: AbortController, timedOut: () => boolean) {
     const signal = abortController.signal;
-    const fail = (problem: string) => failChatTurn(db, replyId, problem);
+    let reportedCost: number | undefined;
+    const fail = (problem: string) => failChatTurn(db, replyId, problem, reportedCost);
     const stopped = () => fail(timedOut() ? CHAT_TIMED_OUT : INTERRUPTED_TEXT);
 
     let promptText: string;
@@ -148,7 +149,11 @@ export function createChatRunner(opts: Options): ChatRunner {
           appendFileSync(transcript, `${JSON.stringify(line)}\n`);
         }
         if (message.type === "assistant" && message.error === "authentication_failed") authFailed = true;
-        if (message.type === "result") result = message as unknown as Record<string, unknown>;
+        if (message.type === "result") {
+          result = message as unknown as Record<string, unknown>;
+          const cost = Number(result.total_cost_usd);
+          if (Number.isFinite(cost)) reportedCost = cost;
+        }
       }
     } catch (err) {
       // The SDK can reject after yielding messages (nonzero process exit): keep what arrived.
@@ -165,8 +170,13 @@ export function createChatRunner(opts: Options): ChatRunner {
       fail(CHAT_SIGNED_OUT);
       return;
     }
+    // A closing exception is only swallowed when a terminal error result explains it.
+    if (closeError !== undefined && (!result || result.subtype === "success")) {
+      fail(messageOf(closeError));
+      return;
+    }
     if (!result) {
-      fail(closeError !== undefined ? messageOf(closeError) : CHAT_NO_REPLY);
+      fail(CHAT_NO_REPLY);
       return;
     }
     if (result.subtype !== "success") {
@@ -183,7 +193,7 @@ export function createChatRunner(opts: Options): ChatRunner {
     finishChatTurn(db, replyId, {
       reply,
       ...(request ? { request } : {}),
-      costUsd: Number(result.total_cost_usd ?? 0),
+      costUsd: reportedCost ?? 0,
     });
   }
 

@@ -98,10 +98,11 @@ export function finishChatTurn(
   });
 }
 
-export function failChatTurn(db: DatabaseSync, replyId: number, problem: string): void {
+// costUsd keeps what the SDK reported for a turn that still failed.
+export function failChatTurn(db: DatabaseSync, replyId: number, problem: string, costUsd?: number): void {
   db.prepare(
-    "UPDATE chat_messages SET status = 'failed', text = ? WHERE id = ? AND role = 'assistant' AND status = 'pending'",
-  ).run(problem, replyId);
+    "UPDATE chat_messages SET status = 'failed', text = ?, cost_usd = COALESCE(?, cost_usd) WHERE id = ? AND role = 'assistant' AND status = 'pending'",
+  ).run(problem, costUsd ?? null, replyId);
 }
 
 export function failInterruptedTurns(db: DatabaseSync): number {
