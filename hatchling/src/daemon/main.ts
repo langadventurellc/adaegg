@@ -2,6 +2,8 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { failInterruptedTurns } from "../engine/chat.ts";
 import { type Config, loadConfig } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
 import { deleteReady, RESTART_EXIT_CODE, writeReady } from "../engine/lifecycle.ts";
@@ -11,6 +13,7 @@ import type { NodeRegistry } from "../engine/nodes/types.ts";
 import { dbPath, findRepoRoot, stateDir } from "../engine/paths.ts";
 import { loadWorkflows } from "../engine/workflows/load.ts";
 import type { Workflow } from "../engine/workflows/schema.ts";
+import { type ChatRunner, createChatRunner } from "../server/chat.ts";
 import { createUiServer } from "../server/server.ts";
 import { createDaemon, type Daemon } from "./daemon.ts";
 
@@ -100,8 +103,8 @@ export async function startDaemon(deps: StartDeps): Promise<Started> {
 }
 
 // The real UI server, adapted to what `startDaemon` needs.
-function uiFor(db: DatabaseSync, root: string, port: number): NonNullable<StartDeps["ui"]> {
-  const server = createUiServer({ db, root, port });
+function uiFor(db: DatabaseSync, root: string, port: number, chat: ChatRunner): NonNullable<StartDeps["ui"]> {
+  const server = createUiServer({ db, root, port, chat });
   return { start: async () => ({ url: (await server.start()).url }), stop: () => server.stop() };
 }
 
@@ -114,13 +117,16 @@ export async function main(): Promise<void> {
     return;
   }
   const db = openDb(dbPath(root, process.env));
+  // Only the daemon owns chat turns, so only it can know that a pending one was cut off by a restart.
+  failInterruptedTurns(db);
+  const chat = createChatRunner({ db, root, stateDir: stateDir(root, process.env), appConfig, query });
   const { shutdown } = await startDaemon({
     db,
     workflows,
     nodeTypes: builtinNodeTypes,
     appConfig,
     paths: { root, stateDir: stateDir(root, process.env) },
-    ...(appConfig.ui.enabled ? { ui: uiFor(db, root, appConfig.ui.port) } : {}),
+    ...(appConfig.ui.enabled ? { ui: uiFor(db, root, appConfig.ui.port, chat) } : {}),
     exit: (code) => process.exit(code),
   });
   process.on("SIGINT", () => void shutdown());
