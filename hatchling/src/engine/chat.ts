@@ -29,7 +29,9 @@ export type ChatContextMessage = {
 export const INTERRUPTED_TEXT = "This reply was interrupted by a restart. Send your message again.";
 
 const CONTEXT_MESSAGES = 20;
+const CONTEXT_FETCH = 40;
 const CONTEXT_TEXT_CHARS = 4000;
+const OPEN_USER_CHARS = 40_000;
 
 export function isChatBusy(db: DatabaseSync): boolean {
   return (
@@ -122,11 +124,39 @@ export function chatContext(db: DatabaseSync, replyId: number): ChatContextMessa
          ORDER BY m.id DESC LIMIT ?
        ) ORDER BY id`,
     )
-    .all(replyId, CONTEXT_MESSAGES);
-  return rows.map((r) => ({
-    role: r.role as ChatContextMessage["role"],
-    text: (r.text as string).slice(0, CONTEXT_TEXT_CHARS),
-    requestId: (r.request_id as string | null) ?? null,
-    requestTitle: (r.request_title as string | null) ?? null,
-  }));
+    .all(replyId, CONTEXT_FETCH);
+  // Messages after the newest queued request are the ask the chat is still working on. They stay whole (within a
+  // budget) and the window reaches back to the first of them, so a late requirement in a long ask survives the
+  // clarifying questions before it is queued.
+  const queued = db
+    .prepare(
+      "SELECT MAX(id) AS id FROM chat_messages WHERE role = 'assistant' AND status = 'done' AND request_id IS NOT NULL AND id < ?",
+    )
+    .get(replyId);
+  const lastQueuedId = (queued?.id as number | null | undefined) ?? 0;
+  const isOpen = (r: Record<string, unknown>) => (r.id as number) > lastQueuedId;
+  const firstOpen = rows.findIndex(isOpen);
+  const start =
+    firstOpen === -1
+      ? Math.max(0, rows.length - CONTEXT_MESSAGES)
+      : Math.min(firstOpen, Math.max(0, rows.length - CONTEXT_MESSAGES));
+  let fullChars = 0;
+  let seenOpenUser = false;
+  return rows.slice(start).map((r) => {
+    const full = r.text as string;
+    let text = full.slice(0, CONTEXT_TEXT_CHARS);
+    if (r.role === "user" && isOpen(r)) {
+      if (!seenOpenUser || fullChars + full.length <= OPEN_USER_CHARS) {
+        text = full;
+        fullChars += full.length;
+      }
+      seenOpenUser = true;
+    }
+    return {
+      role: r.role as ChatContextMessage["role"],
+      text,
+      requestId: (r.request_id as string | null) ?? null,
+      requestTitle: (r.request_title as string | null) ?? null,
+    };
+  });
 }

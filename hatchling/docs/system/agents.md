@@ -75,8 +75,8 @@ The chat agent (`src/server/chat.ts`, role text in `prompts/chat.md`) turns what
 
 - **Model:** `models.chat` (default `sonnet`).
 - **Tools:** `Read`, `Glob`, `Grep`, `Bash(git log*)`, `Bash(git show*)`, `Bash(git diff*)`, `Bash(git status*)` and `Bash(ls *)`, with `permissionMode: 'dontAsk'`, `settingSources: ['project']`, `maxTurns: 12` and `maxBudgetUsd: 0.5`. It runs with `cwd: root`, so the Read-only rule above applies: no `Write`, `Edit` or bare `Bash`.
-- **Prompt:** the role text, the earlier conversation, a digest of up to 20 queue rows (so the agent needs no `hatch` command) and the latest message.
-- **Output:** structured output `{ reply, request? }` (else the last fenced `json` block), validated with Zod. A valid `request` is queued with the reply in one transaction. Invalid or missing output fails the turn.
+- **Prompt:** the role text, the earlier conversation (each message kept to 4000 characters, except the ask the chat has not queued yet, meaning the user messages after the last queued request, which is included in full, up to 40,000 characters in total with the oldest such message always in full; the context is the last 20 messages, extended back to the start of that ask, at most 40), a digest of up to 20 queue rows (so the agent needs no `hatch` command) and the latest message.
+- **Output:** structured output `{ reply, request? }` (else the last fenced `json` block), validated with Zod (`request.contents` may be up to 30,000 characters). A valid `request` is queued with the reply in one transaction. Invalid or missing output fails the turn.
 - **Sign-in:** detected as in the agent node (an `authentication_failed` assistant message, or an error result matching the same pattern); the turn fails with sign-in guidance. The runner handles no credentials.
 - **Time and stop:** a turn is aborted after 3 minutes, or when the server stops, and is failed with a message that says so.
 - **Transcript and cost:** JSON lines in `<state dir>/logs/chat/<reply id>.jsonl`, cut as for agent transcripts; the `tidy` workflow's log cleanup removes old directories under `logs/`. The turn's cost is stored on the reply message (`cost_usd`).

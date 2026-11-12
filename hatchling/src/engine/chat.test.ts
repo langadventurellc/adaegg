@@ -164,4 +164,58 @@ describe("chatContext", () => {
     expect(ctx.at(-2)).toMatchObject({ role: "assistant", requestTitle: "T" });
     expect(ctx.at(-1)).toMatchObject({ role: "user", text: "next", requestId: null });
   });
+
+  it("keeps an unresolved ask in full through a clarifying question", () => {
+    const db = openDb(":memory:");
+    const ask = `${"a".repeat(8500)}LAST-REQUIREMENT${"b".repeat(484)}`;
+    doneTurn(db, ask, "Which page?");
+    const { replyId } = addChatTurn(db, "the home page");
+    const ctx = chatContext(db, replyId);
+    expect(ctx.map((m) => m.text.length)).toEqual([9000, 11, 13]);
+    expect(ctx[0]?.text).toContain("LAST-REQUIREMENT");
+    expect(ctx[2]?.text).toBe("the home page");
+  });
+
+  it("cuts a resolved ask but keeps a new ask after the queued request in full", () => {
+    const db = openDb(":memory:");
+    const { replyId } = addChatTurn(db, "x".repeat(5000));
+    finishChatTurn(db, replyId, { reply: "ok", request: { title: "T", contents: "c" } });
+    doneTurn(db, "y".repeat(6000), "question?");
+    const next = addChatTurn(db, "answer");
+    const ctx = chatContext(db, next.replyId);
+    expect(ctx.map((m) => m.text.length)).toEqual([4000, 2, 6000, 9, 6]);
+  });
+
+  it("keeps open user messages in full up to the budget, counted from the oldest", () => {
+    const db = openDb(":memory:");
+    for (let i = 0; i < 4; i++) doneTurn(db, "u".repeat(10_000), "q");
+    const { replyId } = addChatTurn(db, "u".repeat(10_000));
+    const users = chatContext(db, replyId).filter((m) => m.role === "user");
+    expect(users.map((m) => m.text.length)).toEqual([10_000, 10_000, 10_000, 10_000, 4000]);
+  });
+
+  it("extends the window back to the start of the open ask, at most 40 messages", () => {
+    const db = openDb(":memory:");
+    doneTurn(db, "the ask", "q0");
+    for (let i = 1; i <= 11; i++) doneTurn(db, `a${i}`, `q${i}`);
+    const { replyId } = addChatTurn(db, "last");
+    const ctx = chatContext(db, replyId);
+    expect(ctx).toHaveLength(25);
+    expect(ctx[0]?.text).toBe("the ask");
+
+    const long = openDb(":memory:");
+    doneTurn(long, "the ask", "q0");
+    for (let i = 1; i <= 21; i++) doneTurn(long, `a${i}`, `q${i}`);
+    const last = addChatTurn(long, "last");
+    const longCtx = chatContext(long, last.replyId);
+    expect(longCtx).toHaveLength(40);
+    expect(longCtx.at(-1)?.text).toBe("last");
+  });
+
+  it("cuts open assistant messages to 4000 characters", () => {
+    const db = openDb(":memory:");
+    doneTurn(db, "ask", "r".repeat(6000));
+    const { replyId } = addChatTurn(db, "answer");
+    expect(chatContext(db, replyId)[1]?.text).toHaveLength(4000);
+  });
 });
