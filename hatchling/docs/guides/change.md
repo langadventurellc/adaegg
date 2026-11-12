@@ -19,7 +19,7 @@ Queue an item for anything under `src/`, `workflows/`, `prompts/`, `bin/`, or co
 | `prompts/implement.md`, `prompts/review.md` | Changes how the implementer and the reviewer behave. The review prompt must keep ending in the verdict JSON `{ "verdict": "approve" \| "changes", "findings": [] }`. |
 | `prompts/plan.md`, `prompts/verify.md` | Changes planning and verification. Both must keep ending in the plan JSON `{ "summary": "...", "items": [{ "key", "title", "contents", "dependsOn" }] }`. |
 | `workflows/*.yaml` | Changes the cycle a work item goes through. Keep every loop bounded by an edge with `max`, and update the edge table in [workflows](../system/workflows.md). |
-| `adaegg.json` | Configuration: `baseBranch`, `checks`, `setup`, `checksTimeoutMinutes`, `maxConcurrentRuns` and `models.implement` / `models.review`. Models are read once when the daemon starts, so they take effect after a restart. |
+| `adaegg.json` | Configuration: `baseBranch`, `checks`, `setup`, `checksTimeoutMinutes`, `maxConcurrentRuns` and `models.implement` / `models.review` / `models.chat`. Models are read once when the daemon starts, so they take effect after a restart. |
 | `src/engine/nodes/` | A new node type: follow [add a node](add-a-node.md). |
 
 Rules that tests enforce:

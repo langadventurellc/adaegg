@@ -4,7 +4,7 @@ A hatchling is a small, self-rewriting system: it is changed by describing the c
 
 ## Layout
 
-- `src/engine/`: paths, config, database, page data store (`page-data.ts`), queue store, run store, runner, workflow loader and node types (`nodes/`).
+- `src/engine/`: paths, config, database, page data store (`page-data.ts`), the stored chat thread (`chat.ts`), queue store, run store, runner, workflow loader and node types (`nodes/`).
 - `src/daemon/`: the daemon (`daemon.ts`) and its entry point (`main.ts`).
 - `src/supervisor/`: the supervisor behind `hatch start`.
 - `src/cli/`: the `hatch` CLI.
