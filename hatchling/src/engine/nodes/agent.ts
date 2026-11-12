@@ -81,7 +81,9 @@ function promptPath(root: string, prompt: string): string | null {
   return file;
 }
 
-function truncate(text: string): string {
+export const AUTH_PATTERN = /authenticat|not logged in|invalid api key/i;
+
+export function truncate(text: string): string {
   return text.length > TOOL_OUTPUT_LIMIT ? `${text.slice(0, TOOL_OUTPUT_LIMIT)}… [truncated]` : text;
 }
 
@@ -98,7 +100,7 @@ function textOf(content: unknown): string {
 type Block = { type?: string; text?: string; name?: string; input?: unknown; content?: unknown };
 
 // One transcript line per assistant text, tool use and tool result.
-function transcriptLines(message: { type: string; message?: { content?: unknown } }): object[] {
+export function transcriptLines(message: { type: string; message?: { content?: unknown } }): object[] {
   const content = message.message?.content;
   if (!Array.isArray(content)) return [];
   const lines: object[] = [];
@@ -114,7 +116,7 @@ function transcriptLines(message: { type: string; message?: { content?: unknown 
   return lines;
 }
 
-function lastJsonBlock(text: string): unknown {
+export function lastJsonBlock(text: string): unknown {
   const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)```/g)];
   const last = blocks.at(-1)?.[1];
   if (last === undefined) return undefined;
@@ -244,8 +246,7 @@ function createNode(type: "agent" | "review", query: QueryFn) {
       const resultText = typeof result?.result === "string" ? result.result : "";
 
       const errorText = Array.isArray(result?.errors) ? result.errors.map(String).join("\n") : "";
-      const authPattern = /authenticat|not logged in|invalid api key/i;
-      if (authFailed || (result?.is_error === true && authPattern.test(`${resultText}\n${errorText}`))) {
+      if (authFailed || (result?.is_error === true && AUTH_PATTERN.test(`${resultText}\n${errorText}`))) {
         return { outcome: "blocked", problem: AUTH_PROBLEM, ...spent };
       }
       // A closing exception is only swallowed when a terminal error result explains it.
