@@ -78,8 +78,9 @@ function renderAskSlots(): void {
   const thread = document.querySelector<HTMLElement>("#thread");
   if (thread) {
     const wasAtBottom = atBottom(thread);
+    const top = thread.scrollTop;
     thread.innerHTML = renderThread(messages, session.rows);
-    if (scrollsToEnd(shownMessages, messages, wasAtBottom)) thread.scrollTop = thread.scrollHeight;
+    thread.scrollTop = scrollsToEnd(shownMessages, messages, wasAtBottom) ? thread.scrollHeight : top;
   }
   shownMessages = messages;
   const other = document.querySelector<HTMLElement>("#other-requests");
@@ -134,13 +135,20 @@ function fullRender(): void {
     title = `Ask ${name}`;
     body = renderAsk({ name, starters, requests: session.rows, pages: PAGES, chat: session.chat });
   }
+  const oldThread = document.querySelector<HTMLElement>("#thread");
+  const oldTop = oldThread ? oldThread.scrollTop : 0;
+  const oldAtBottom = oldThread ? atBottom(oldThread) : true;
   app.innerHTML = `<div id="banner">${bannerHtml()}</div><main>${body}</main>`;
   document.title = title;
   shownScreen = view;
   shownSuggestion = s.suggestion !== null;
-  shownMessages = session.chat.messages;
   const thread = document.querySelector<HTMLElement>("#thread");
-  if (thread) thread.scrollTop = thread.scrollHeight;
+  if (thread) {
+    // A fresh thread starts at its newest message; a re-render keeps the reader's place.
+    const end = !oldThread || scrollsToEnd(shownMessages, session.chat.messages, oldAtBottom);
+    thread.scrollTop = end ? thread.scrollHeight : oldTop;
+  }
+  shownMessages = session.chat.messages;
   const root = document.querySelector<HTMLElement>("#page-root");
   if (page && root) {
     try {
