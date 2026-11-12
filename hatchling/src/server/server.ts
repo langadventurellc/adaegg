@@ -75,6 +75,7 @@ export function createUiServer(opts: UiServerOptions): UiServer {
   let vite: ViteDevServer | undefined;
   let boundPort = 0;
   let stopping: Promise<void> | undefined;
+  let shuttingDown = false;
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const method = req.method ?? "GET";
@@ -103,6 +104,11 @@ export function createUiServer(opts: UiServerOptions): UiServer {
             return;
           }
         }
+      }
+      // Checked after the body is read, so a request still arriving when shutdown began is refused too.
+      if (shuttingDown && pathname === "/api/chat") {
+        sendJson(res, 503, { error: "The hatchling is stopping. Try again once it is back." });
+        return;
       }
       const out = handleApi(opts.db, { method, path: pathname, body }, opts.chat ? { chat: opts.chat } : undefined);
       sendJson(res, out.status, out.body);
@@ -226,6 +232,7 @@ export function createUiServer(opts: UiServerOptions): UiServer {
   }
 
   function stop(): Promise<void> {
+    shuttingDown = true;
     stopping ??= (async () => {
       await opts.chat?.stop();
       if (vite) await vite.close();
