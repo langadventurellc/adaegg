@@ -1,7 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addChatTurn, finishChatTurn, INTERRUPTED_TEXT, listChatMessages } from "../engine/chat.ts";
 import { type Config, ConfigSchema } from "../engine/config.ts";
@@ -9,6 +10,8 @@ import { openDb } from "../engine/db.ts";
 import type { QueryFn } from "../engine/nodes/agent.ts";
 import { addWorkItem, listWorkItems } from "../engine/store.ts";
 import { CHAT_JSON_SCHEMA, createChatRunner } from "./chat.ts";
+
+const PROMPT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts", "chat.md");
 
 type Msg = Record<string, unknown>;
 
@@ -44,7 +47,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   dir = mkdtempSync(join(tmpdir(), "chat-runner-"));
   mkdirSync(join(dir, "prompts"));
-  copyFileSync(resolve("prompts/chat.md"), join(dir, "prompts", "chat.md"));
+  copyFileSync(PROMPT, join(dir, "prompts", "chat.md"));
   config = ConfigSchema.parse({ schema: 1 });
 });
 afterEach(() => {
