@@ -1,15 +1,25 @@
 import { request } from "node:http";
 import { connect } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listChatMessages } from "../engine/chat.ts";
 import { openDb } from "../engine/db.ts";
-import { createUiServer, type UiServer } from "./server.ts";
+import { createUiServer, type UiServer, type UiServerOptions } from "./server.ts";
 
 const servers: UiServer[] = [];
 
-async function begin(port = 0) {
-  const server = createUiServer({ db: db(), root: ".", port, vite: false });
+async function begin(port = 0, extra: Partial<UiServerOptions> = {}) {
+  const server = createUiServer({ db: db(), root: ".", port, vite: false, ...extra });
   servers.push(server);
   return { server, ...(await server.start()) };
+}
+
+// A chat stub whose stop() stays pending until the test releases it, holding shutdown open.
+function heldChat() {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { chat: { start: vi.fn(), stop: () => gate }, release };
 }
 
 function db() {
@@ -43,6 +53,79 @@ function refused(port: number) {
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(servers.splice(0).map((s) => s.stop()));
+});
+
+describe("createUiServer shutdown", () => {
+  const STOPPING = { error: "The hatchling is stopping. Try again once it is back." };
+
+  it("accepts chat before shutdown", async () => {
+    const { chat, release } = heldChat();
+    const { server, url } = await begin(0, { chat });
+    const res = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ text: "hi" }),
+    });
+    expect(res.status).toBe(202);
+    expect(chat.start).toHaveBeenCalledTimes(1);
+    release();
+    await server.stop();
+  });
+
+  it("refuses chat once stop has been called and stores and starts nothing", async () => {
+    const { chat, release } = heldChat();
+    const own = db();
+    const { server, url } = await begin(0, { chat, db: own });
+    const stopped = server.stop();
+    const res = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ text: "hi" }),
+    });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual(STOPPING);
+    expect(chat.start).not.toHaveBeenCalled();
+    expect(listChatMessages(own)).toEqual([]);
+    release();
+    await stopped;
+  });
+
+  it("refuses a chat request whose body finishes arriving after stop", async () => {
+    const { chat, release } = heldChat();
+    const own = db();
+    const { server, port } = await begin(0, { chat, db: own });
+    let stopped: Promise<void> | undefined;
+    const status = new Promise<number>((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port, path: "/api/chat", method: "POST", headers: JSON_HEADERS },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode ?? 0));
+        },
+      );
+      req.on("error", reject);
+      req.write('{"text":');
+      setTimeout(() => {
+        stopped = server.stop();
+        req.end('"hi"}');
+      }, 50);
+    });
+    expect(await status).toBe(503);
+    expect(chat.start).not.toHaveBeenCalled();
+    expect(listChatMessages(own)).toEqual([]);
+    release();
+    await stopped;
+  });
+
+  it("still serves other API calls while stopping", async () => {
+    const { chat, release } = heldChat();
+    const { server, url } = await begin(0, { chat });
+    const stopped = server.stop();
+    const res = await fetch(`${url}/api/state`);
+    expect(res.status).toBe(200);
+    release();
+    await stopped;
+  });
 });
 
 describe("createUiServer", () => {
