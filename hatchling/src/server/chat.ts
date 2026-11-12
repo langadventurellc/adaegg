@@ -18,6 +18,8 @@ const DEFAULT_TIMEOUT_MS = 3 * 60 * 1000;
 const QUEUE_ROWS = 20;
 const ERROR_CHARS = 300;
 const ATTENTION_ERROR_CHARS = 800;
+// The 10,000-character ask limit plus room for the decisions and assumptions the chat adds.
+export const MAX_REQUEST_CONTENTS = 30_000;
 
 export const CHAT_SIGNED_OUT =
   "Claude isn't signed in. Run `claude` once to log in, or set ANTHROPIC_API_KEY, then send your message again.";
@@ -52,7 +54,7 @@ export const CHAT_JSON_SCHEMA = {
 
 const ChatOutputSchema = z.object({
   reply: z.string().min(1),
-  request: z.object({ title: z.string().min(1), contents: z.string().min(1).max(10_000) }).optional(),
+  request: z.object({ title: z.string().min(1), contents: z.string().min(1).max(MAX_REQUEST_CONTENTS) }).optional(),
 });
 
 export type ChatRunner = { start(replyId: number): void; stop(): Promise<void> };

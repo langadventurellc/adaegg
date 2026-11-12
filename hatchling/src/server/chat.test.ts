@@ -10,7 +10,7 @@ import { openDb } from "../engine/db.ts";
 import type { QueryFn } from "../engine/nodes/agent.ts";
 import { EXHAUSTED_ROUNDS_PREFIX } from "../engine/nodes/enqueue.ts";
 import { addWorkItem, listWorkItems } from "../engine/store.ts";
-import { buildChatPrompt, CHAT_JSON_SCHEMA, createChatRunner } from "./chat.ts";
+import { buildChatPrompt, CHAT_JSON_SCHEMA, CHAT_NO_REPLY, createChatRunner, MAX_REQUEST_CONTENTS } from "./chat.ts";
 import { FOLLOW_UP_HEADER } from "./followup.ts";
 
 const PROMPT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "prompts", "chat.md");
@@ -382,6 +382,55 @@ describe("chat runner", () => {
     const queue = prompt.slice(prompt.indexOf("# Queue"), prompt.indexOf("# Latest message"));
     expect(queue).toContain(`${existing.id.slice(0, 8)} "Other request" planning`);
     expect(prompt.slice(prompt.indexOf("# Latest message"))).toContain("newest ask");
+  });
+
+  it("carries a late requirement of an unresolved ask into the prompt and the queued request", async () => {
+    const ask = `${"a".repeat(8500)}LAST-REQUIREMENT${"b".repeat(484)}`;
+    const first = addChatTurn(db, ask);
+    finishChatTurn(db, first.replyId, { reply: "Which page?" });
+
+    const calls: Call[] = [];
+    const contents = `${"c".repeat(8500)}LAST-REQUIREMENT${"d".repeat(3484)}`;
+    const { message } = await turn(
+      fakeQuery(calls, () => [
+        result({ structured_output: { reply: "Queued.", request: { title: "Big ask", contents } } }),
+      ]),
+      "the home page",
+    );
+    const prompt = calls[0]?.prompt ?? "";
+    const conversation = prompt.slice(prompt.indexOf("# Conversation"), prompt.indexOf("# Queue"));
+    expect(conversation).toContain("LAST-REQUIREMENT");
+    expect(prompt.slice(prompt.indexOf("# Latest message"))).toContain("the home page");
+    expect(message.status).toBe("done");
+    const queued = listWorkItems(db).find((w) => w.title === "Big ask");
+    expect(queued?.contents).toContain("LAST-REQUIREMENT");
+  });
+
+  it("accepts contents of MAX_REQUEST_CONTENTS and fails the turn on one more", async () => {
+    const ok = await turn(
+      fakeQuery([], () => [
+        result({
+          structured_output: {
+            reply: "Queued.",
+            request: { title: "Max", contents: "x".repeat(MAX_REQUEST_CONTENTS) },
+          },
+        }),
+      ]),
+    );
+    expect(ok.message.status).toBe("done");
+    const bad = await turn(
+      fakeQuery([], () => [
+        result({
+          structured_output: {
+            reply: "Queued.",
+            request: { title: "Too long", contents: "x".repeat(MAX_REQUEST_CONTENTS + 1) },
+          },
+        }),
+      ]),
+    );
+    expect(bad.message.status).toBe("failed");
+    expect(bad.message.text).toBe(CHAT_NO_REPLY);
+    expect(listWorkItems(db).some((w) => w.title === "Too long")).toBe(false);
   });
 
   it("fails a turn whose query throws", async () => {
