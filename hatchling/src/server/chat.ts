@@ -150,6 +150,7 @@ export function createChatRunner(opts: Options): ChatRunner {
   const { db, root, stateDir, appConfig, query } = opts;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const inFlight = new Map<Promise<void>, AbortController>();
+  let isStopped = false;
 
   async function runTurn(replyId: number, abortController: AbortController, timedOut: () => boolean) {
     const signal = abortController.signal;
@@ -262,11 +263,20 @@ export function createChatRunner(opts: Options): ChatRunner {
 
   return {
     start(replyId) {
+      if (isStopped) {
+        try {
+          failChatTurn(db, replyId, INTERRUPTED_TEXT);
+        } catch {
+          // The db may already be closed: nothing to record.
+        }
+        return;
+      }
       const abortController = new AbortController();
       const promise: Promise<void> = turn(replyId, abortController).finally(() => inFlight.delete(promise));
       inFlight.set(promise, abortController);
     },
     async stop() {
+      isStopped = true;
       const running = [...inFlight];
       for (const [, controller] of running) controller.abort(new Error("chat stopped"));
       await Promise.all(running.map(([promise]) => promise));

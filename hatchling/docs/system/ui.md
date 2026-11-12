@@ -20,7 +20,7 @@ All bodies are JSON. An error is `{ "error": "<message>" }` with status 400 (bad
 | `GET /api/state` | | 200 `{ name, queue, chat }` (shapes below) |
 | `POST /api/name` | `{ name }` | 200 `{ name }` with the cleaned name; 400 when the name is invalid |
 | `POST /api/ask` | `{ text }` | 201 `{ id, title }`: creates a work item of kind `request` |
-| `POST /api/chat` | `{ text }` | 202 `{ messageId, replyId }`: stores the message and starts the reply in the background; 400 for a bad `text` (same rules as `/api/ask`); 409 `Still answering your last message.` while a reply is pending; 503 `Chat is not available.` when the server has no chat runner |
+| `POST /api/chat` | `{ text }` | 202 `{ messageId, replyId }`: stores the message and starts the reply in the background; 400 for a bad `text` (same rules as `/api/ask`); 409 `Still answering your last message.` while a reply is pending; 503 `Chat is not available.` when the server has no chat runner, or 503 `The hatchling is stopping. Try again once it is back.` once shutdown has begun |
 | `POST /api/items/<id>/retry` | `{}` | 200 `{ id, status }` with `status` `"queued"`; 404 unknown id; 409 when the item cannot be retried |
 | `POST /api/items/<id>/cancel` | `{}` | 200 `{ id, status }` with `status` `"cancelled"`; 404 unknown id; 409 when the item cannot be cancelled |
 | `POST /api/items/<id>/continue` | `{}` | 201 `{ id, title }` of the new follow-up request; 404 unknown id; 409 when the item is not an incomplete request, or was already continued |
@@ -51,6 +51,8 @@ Anything asked through `/api/ask` is a `request`, which the daemon plans into it
 ## Chat
 
 `POST /api/chat` is a conversation with the hatchling that ends in one well-written `request`. There is one thread (the `chat_messages` table, `src/engine/chat.ts`) and one turn at a time: while a reply is pending a second message is refused with 409. The runner (`src/server/chat.ts`, see [agents](agents.md)) lives in the daemon process and runs the turn outside the run queue: a queued work item would wait behind a build for minutes, and a chat reply must come back in seconds. A turn that was still pending when the daemon stopped is failed at daemon start (`failInterruptedTurns`, called only from `src/daemon/main.ts`, never by the CLI). The agent either queues a request it wrote (an ordinary `request` work item, see [queue](queue.md)) or replies with questions.
+
+Shutdown stops the chat runner first and refuses new chat messages from that moment (including a request whose body was still arriving), and the runner starts nothing after it has been stopped: a late `start` marks its reply failed as interrupted.
 
 `POST /api/ask` stays the direct route: its raw text becomes the request as it is. Outside agents use it.
 

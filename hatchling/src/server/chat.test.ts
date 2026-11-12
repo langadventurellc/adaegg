@@ -459,6 +459,35 @@ describe("chat runner", () => {
     expect(message?.text).toBe(INTERRUPTED_TEXT);
   });
 
+  it("starts nothing after stop and fails the late reply as interrupted", async () => {
+    const calls: Call[] = [];
+    const r = runner(fakeQuery(calls, () => [result({ structured_output: { reply: "ok" } })]));
+    await r.stop();
+    const { replyId } = addChatTurn(db, "late");
+    r.start(replyId);
+    expect(calls).toEqual([]);
+    const message = listChatMessages(db).find((m) => m.id === replyId);
+    expect(message?.status).toBe("failed");
+    expect(message?.text).toBe(INTERRUPTED_TEXT);
+  });
+
+  it("does not throw when start is called after stop with the db closed", async () => {
+    const ownDb = openDb(":memory:");
+    const calls: Call[] = [];
+    const r = createChatRunner({
+      db: ownDb,
+      root: dir,
+      stateDir: join(dir, "state"),
+      appConfig: config,
+      query: fakeQuery(calls, () => []),
+    });
+    const { replyId } = addChatTurn(ownDb, "late");
+    await r.stop();
+    ownDb.close();
+    expect(() => r.start(replyId)).not.toThrow();
+    expect(calls).toEqual([]);
+  });
+
   it("fails a turn that runs past the timeout", async () => {
     const waiting = fakeQuery([], (call) =>
       (async function* () {
