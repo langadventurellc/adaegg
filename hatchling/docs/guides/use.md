@@ -21,7 +21,7 @@ The first visit goes like this:
 
 1. Run `hatch status` and open the URL on its `ui` line.
 2. Name the hatchling: accept the suggested name or ask for another, then choose it.
-3. Chat: type what you want, or pick a starter, and press Send (or Enter). The reply says what was queued, and the request's card appears in the chat with its status.
+3. Chat: type and press Send (or Enter), or click a starter. The hatchling may answer a question or ask a clarifying question first. When it queues a request, the reply says what was queued, and the request's card appears in the chat with its status.
 
 ## Write a good item
 

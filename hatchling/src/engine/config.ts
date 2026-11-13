@@ -10,7 +10,7 @@ export const ConfigSchema = z.object({
   setup: z.string().default("npm ci"),
   checksTimeoutMinutes: z.number().positive().default(20),
   maxConcurrentRuns: z.number().int().positive().default(1),
-  // Model aliases for the agent nodes, by the role a node names in its `model`.
+  // Model aliases for workflow agent roles (named by each node's `model`) and the chat runner.
   models: z
     .object({
       implement: z.string().default("sonnet"),

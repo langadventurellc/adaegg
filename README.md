@@ -45,7 +45,7 @@ The repository is local only. Nothing is pushed anywhere. You may add your own r
 
 ## How a request becomes software
 
-Everything you ask becomes a *request*. In the browser you chat with your hatchling: when your ask is clear it queues one request right away, and otherwise it asks a short question first. From the terminal you queue a request yourself. A planner agent splits the request into a chain of items, and each item goes through the `implement` workflow. A verification then checks the result. What you ask for shows up as a page under "Your pages" on the Ask screen.
+Requests for changes become software through the hatchling's queue. In the browser you chat with your hatchling: it can answer questions about your existing software, queue a *request* when a change is clear, or ask a short question to clarify it first. From the terminal you queue a request yourself. A planner agent splits the request into a chain of items, and each item goes through the `implement` workflow. A verification then checks the result. What you ask for shows up as a page under "Your pages" on the Ask screen.
 
 - request: what the chat agent writes from your conversation, or what you queue from the terminal
   - plan: a planner agent splits it into a chain of items
