@@ -74,6 +74,12 @@ describe("extraction helpers", () => {
 });
 
 describe("README.md", () => {
+  it("distinguishes questions about existing software from requests for changes", () => {
+    expect(readme).toContain("Requests for changes become software");
+    expect(readme).toContain("answer questions about your existing software");
+    expect(readme).not.toContain("Everything you ask becomes a");
+  });
+
   it("has no broken relative links", () => {
     const missing = extractLinks(readme).filter((link) => !existsSync(resolve(repoRoot, dirname("README.md"), link)));
     expect(missing).toEqual([]);

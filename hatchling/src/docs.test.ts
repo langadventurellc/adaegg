@@ -284,6 +284,14 @@ describe("failing cases", () => {
 describe("the real docs", () => {
   const files = docsFiles(hatchlingRoot);
 
+  it("explains starter submission and clarification before a request is queued", () => {
+    const guide = readFileSync(join(hatchlingRoot, "docs/guides/use.md"), "utf8");
+    const step = guide.split("\n").find((line) => line.startsWith("3. Chat:"));
+    expect(step).toMatch(/type and press Send.*or click a starter/);
+    expect(step).toContain("ask a clarifying question first");
+    expect(step).toContain("When it queues a request");
+  });
+
   it("have no broken relative links", () => {
     expect(checkLinks(hatchlingRoot, files)).toEqual([]);
   });
