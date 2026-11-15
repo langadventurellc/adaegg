@@ -10,6 +10,7 @@ import {
   applyUnreachable,
   canSend,
   canStartNewConversation,
+  chatAfterNewConversation,
   type FetchResult,
   initialSession,
   initialState,
@@ -169,6 +170,15 @@ describe("chat helpers", () => {
     expect(canStartNewConversation([], false)).toBe(false);
     expect(canStartNewConversation(m, true)).toBe(false);
     expect(canStartNewConversation(m, false)).toBe(true);
+  });
+
+  it("chatAfterNewConversation empties the thread only when the server accepted it", () => {
+    const chat = { messages: [{ id: 1 }, { id: 2 }], busy: false };
+    expect(chatAfterNewConversation(chat, true)).toEqual({ messages: [], busy: false });
+    // A 409 (busy) or an unreachable server, even if a later refresh succeeded: nothing changes.
+    const busy = { messages: [{ id: 1 }], busy: true };
+    expect(chatAfterNewConversation(busy, false)).toBe(busy);
+    expect(chatAfterNewConversation(chat, false)).toBe(chat);
   });
 
   it("canSend needs text and an idle chat", () => {

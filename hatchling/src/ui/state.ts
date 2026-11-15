@@ -107,6 +107,16 @@ export function canStartNewConversation(messages: readonly ChatMessage[], busy: 
   return messages.length > 0 && !busy;
 }
 
+// What the screen shows once the server has accepted a new conversation, before the refresh
+// confirms it: an empty idle thread. A rejected request (409, unreachable) changes nothing,
+// whatever the refresh that follows says.
+export function chatAfterNewConversation<T extends { messages: readonly unknown[]; busy: boolean }>(
+  chat: T,
+  posted: boolean,
+): T {
+  return posted ? { ...chat, messages: [], busy: false } : chat;
+}
+
 export function isSendKey(e: { key: string; shiftKey: boolean; isComposing: boolean }): boolean {
   return e.key === "Enter" && !e.shiftKey && !e.isComposing;
 }

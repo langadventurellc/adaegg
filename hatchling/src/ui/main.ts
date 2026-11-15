@@ -11,6 +11,7 @@ import {
   type ChatState,
   canSend,
   canStartNewConversation,
+  chatAfterNewConversation,
   type FetchResult,
   initialSession,
   isSendKey,
@@ -255,9 +256,12 @@ async function submitName(form: HTMLFormElement): Promise<void> {
 }
 
 // Runs an API call for an action, records its failure, then refreshes at once.
-async function runAction(call: () => Promise<unknown>): Promise<void> {
+// Resolves true when the call itself succeeded, whatever the refresh does afterwards.
+async function runAction(call: () => Promise<unknown>): Promise<boolean> {
+  let ok = false;
   try {
     await call();
+    ok = true;
     session = { ...session, error: null };
   } catch (err) {
     if (err instanceof UnreachableError) session = { ...session, screen: applyUnreachable(session.screen) };
@@ -265,6 +269,7 @@ async function runAction(call: () => Promise<unknown>): Promise<void> {
   }
   await refreshAfterAction(session.error !== null);
   renderBannerSlot();
+  return ok;
 }
 
 // Sends one chat message; resolves true when the server accepted it.
@@ -299,20 +304,25 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
 async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel" | "continue"): Promise<void> {
   const id = button.dataset.id;
   if (!id) return;
-  await withDisabled(button, () => runAction(() => client[action](id)));
+  await withDisabled(button, async () => {
+    await runAction(() => client[action](id));
+  });
 }
 
 async function startNewConversation(button: HTMLButtonElement): Promise<void> {
   if (!canStartNewConversation(session.chat.messages, session.chat.busy)) return;
   button.disabled = true;
+  let posted = false;
   try {
-    await runAction(() => client.newConversation());
+    posted = await runAction(() => client.newConversation());
   } finally {
     // The button follows the chat state: disabled while a reply is pending.
     button.disabled = session.chat.busy;
   }
-  // On a 409 or an unreachable server the error banner shows and the thread stays.
-  if (session.error === null && !session.screen.unreachable) {
+  // On a 409 or an unreachable server the error banner shows and the thread and draft stay.
+  // Once the server accepted it, show the empty thread even if the refresh failed.
+  if (posted) {
+    session = { ...session, chat: chatAfterNewConversation(session.chat, posted) };
     fullRender();
     focusById("ask-text");
   }
