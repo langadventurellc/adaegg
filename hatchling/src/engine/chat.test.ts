@@ -9,6 +9,7 @@ import {
   INTERRUPTED_TEXT,
   isChatBusy,
   listChatMessages,
+  startNewConversation,
 } from "./chat.ts";
 import { openDb } from "./db.ts";
 import { listWorkItems } from "./store.ts";
@@ -217,5 +218,66 @@ describe("chatContext", () => {
     doneTurn(db, "ask", "r".repeat(6000));
     const { replyId } = addChatTurn(db, "answer");
     expect(chatContext(db, replyId)[1]?.text).toHaveLength(4000);
+  });
+});
+
+describe("startNewConversation", () => {
+  const count = (db: ReturnType<typeof openDb>) =>
+    Number(db.prepare("SELECT COUNT(*) AS n FROM chat_messages").get()?.n);
+
+  it("treats every message as current without a marker", () => {
+    const db = openDb(":memory:");
+    doneTurn(db, "one", "a");
+    doneTurn(db, "two", "b");
+    expect(listChatMessages(db)).toHaveLength(4);
+  });
+
+  it("empties the thread, keeps the rows and shows new turns", () => {
+    const db = openDb(":memory:");
+    doneTurn(db, "one", "a");
+    startNewConversation(db);
+    expect(listChatMessages(db)).toEqual([]);
+    expect(count(db)).toBe(2);
+    const { replyId } = addChatTurn(db, "fresh");
+    expect(listChatMessages(db).map((m) => m.text)).toEqual(["fresh", ""]);
+    expect(chatContext(db, replyId).map((m) => m.text)).toEqual(["fresh"]);
+  });
+
+  it("leaves an earlier open ask out of the new context", () => {
+    const db = openDb(":memory:");
+    doneTurn(db, "old open ask", "old question");
+    startNewConversation(db);
+    const { replyId } = addChatTurn(db, "new ask");
+    expect(chatContext(db, replyId).map((m) => m.text)).toEqual(["new ask"]);
+  });
+
+  it("does not let an earlier queued request move the open-ask boundary", () => {
+    const db = openDb(":memory:");
+    const old = addChatTurn(db, "old ask");
+    finishChatTurn(db, old.replyId, { reply: "queued", request: { title: "T", contents: "C" } });
+    startNewConversation(db);
+    doneTurn(db, "new ask", "clarify");
+    const { replyId } = addChatTurn(db, "more");
+    expect(chatContext(db, replyId).map((m) => m.text)).toEqual(["new ask", "clarify", "more"]);
+  });
+
+  it("refuses while a reply is pending and changes nothing", () => {
+    const db = openDb(":memory:");
+    doneTurn(db, "one", "a");
+    startNewConversation(db);
+    addChatTurn(db, "two");
+    const before = listChatMessages(db);
+    expect(() => startNewConversation(db)).toThrow(ChatBusyError);
+    expect(listChatMessages(db)).toEqual(before);
+  });
+
+  it("succeeds twice in a row and on an empty thread", () => {
+    const db = openDb(":memory:");
+    expect(() => startNewConversation(db)).not.toThrow();
+    doneTurn(db, "one", "a");
+    startNewConversation(db);
+    startNewConversation(db);
+    expect(listChatMessages(db)).toEqual([]);
+    expect(count(db)).toBe(2);
   });
 });

@@ -1,5 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
-import { addChatTurn, ChatBusyError, type ChatMessage, isChatBusy, listChatMessages } from "../engine/chat.ts";
+import {
+  addChatTurn,
+  ChatBusyError,
+  type ChatMessage,
+  isChatBusy,
+  listChatMessages,
+  startNewConversation,
+} from "../engine/chat.ts";
 import { deletePageData, isPageDataId, listPageData, setPageData } from "../engine/page-data.ts";
 import { getSetting, setSetting } from "../engine/settings.ts";
 import { addWorkItem, cancelWorkItem, getWorkItem, listWorkItems, retryWorkItem } from "../engine/store.ts";
@@ -113,7 +120,15 @@ export function handleApi(db: DatabaseSync, req: ApiRequest, deps?: ApiDeps): Ap
   const dataDelete = /^\/api\/pages\/([^/]+)\/data\/([^/]+)\/delete$/.exec(path);
   let allowed: string;
   if (path === "/api/state" || dataList) allowed = "GET";
-  else if (path === "/api/name" || path === "/api/ask" || path === "/api/chat" || item || dataSet || dataDelete)
+  else if (
+    path === "/api/name" ||
+    path === "/api/ask" ||
+    path === "/api/chat" ||
+    path === "/api/chat/new" ||
+    item ||
+    dataSet ||
+    dataDelete
+  )
     allowed = "POST";
   else return fail(404, "not found");
   if (method !== allowed) return fail(405, "method not allowed");
@@ -138,6 +153,15 @@ export function handleApi(db: DatabaseSync, req: ApiRequest, deps?: ApiDeps): Ap
     if (!result.ok) return fail(400, result.error);
     setSetting(db, "name", result.name);
     return { status: 200, body: { name: result.name } };
+  }
+  if (path === "/api/chat/new") {
+    try {
+      startNewConversation(db);
+    } catch (err) {
+      if (err instanceof ChatBusyError) return fail(409, "Still answering your last message.");
+      throw err;
+    }
+    return { status: 200, body: {} };
   }
   const text = askText(req.body);
   if (typeof text !== "string") return text;

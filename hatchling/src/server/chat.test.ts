@@ -4,7 +4,13 @@ import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addChatTurn, finishChatTurn, INTERRUPTED_TEXT, listChatMessages } from "../engine/chat.ts";
+import {
+  addChatTurn,
+  finishChatTurn,
+  INTERRUPTED_TEXT,
+  listChatMessages,
+  startNewConversation,
+} from "../engine/chat.ts";
 import { type Config, ConfigSchema } from "../engine/config.ts";
 import { openDb } from "../engine/db.ts";
 import type { QueryFn } from "../engine/nodes/agent.ts";
@@ -78,6 +84,24 @@ async function turn(query: QueryFn, text = "hello", extra: { timeoutMs?: number;
   await r.stop();
   return { message, replyId };
 }
+
+describe("buildChatPrompt in a new conversation", () => {
+  it("shows no earlier conversation for the first reply", () => {
+    doneTurn("earlier ask about tomatoes", "earlier answer");
+    startNewConversation(db);
+    const { replyId } = addChatTurn(db, "something unrelated");
+    const prompt = buildChatPrompt(db, "role", replyId);
+    expect(prompt).toContain("# Conversation\n\n(none yet)");
+    expect(prompt).toContain("# Latest message\n\nsomething unrelated");
+    expect(prompt).not.toContain("tomatoes");
+    expect(prompt).not.toContain("earlier answer");
+  });
+
+  function doneTurn(text: string, reply: string) {
+    const { replyId } = addChatTurn(db, text);
+    finishChatTurn(db, replyId, { reply });
+  }
+});
 
 describe("queue digest", () => {
   function queue() {
