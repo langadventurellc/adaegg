@@ -4,6 +4,7 @@ import { ApiError, createClient, UnreachableError } from "./client.ts";
 import { PAGES, type Page } from "./pages/index.ts";
 import { pickStarters } from "./starters.ts";
 import {
+  actionFailed,
   actionFinished,
   anotherSuggestion,
   applyFetchResult,
@@ -264,8 +265,7 @@ async function runAction(call: () => Promise<unknown>): Promise<boolean> {
     ok = true;
     session = { ...session, error: null };
   } catch (err) {
-    if (err instanceof UnreachableError) session = { ...session, screen: applyUnreachable(session.screen) };
-    else session = { ...session, error: describe(err) };
+    session = actionFailed(session, err instanceof UnreachableError, describe(err));
   }
   await refreshAfterAction(session.error !== null);
   renderBannerSlot();

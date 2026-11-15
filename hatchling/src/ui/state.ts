@@ -159,6 +159,17 @@ export function applyFetchResult(
   };
 }
 
+export const ACTION_UNREACHABLE_MESSAGE = "Couldn't reach your hatchling, so that didn't go through. Try again.";
+
+// Record a failed action. An unreachable server also sets an explicit action error, because the
+// restarting flag is cleared by the next successful fetch and the failure must outlive it.
+export function actionFailed(session: Session, unreachable: boolean, message: string): Session {
+  if (unreachable) {
+    return { ...session, screen: applyUnreachable(session.screen), error: ACTION_UNREACHABLE_MESSAGE };
+  }
+  return { ...session, error: message };
+}
+
 export function setError(s: ScreenState, error: string | null): ScreenState {
   return { ...s, error };
 }

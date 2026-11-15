@@ -3,6 +3,8 @@ import type { ChatMessage } from "../engine/chat.ts";
 import { NAMES, type NameEntry } from "../names/names.ts";
 import type { RequestRow } from "../server/queue.ts";
 import {
+  ACTION_UNREACHABLE_MESSAGE,
+  actionFailed,
   actionFinished,
   anotherSuggestion,
   applyFetched,
@@ -106,6 +108,21 @@ describe("session sequencing", () => {
     const stale = actionFinished(initialSession());
     expect(applyFetchResult(stale, 0, fetched("A"), () => 0).chat).toEqual({ messages: [], busy: false });
     expect(applyFetchResult(s, 0, { kind: "unreachable" }, () => 0).chat).toEqual(chat);
+  });
+
+  it("keeps an unreachable action's error through the successful refresh that follows", () => {
+    let s = applyFetchResult(initialSession(), 0, fetched("A"), () => 0);
+    s = actionFailed(s, true, "ignored");
+    expect(s.screen.unreachable).toBe(true);
+    expect(s.error).toBe(ACTION_UNREACHABLE_MESSAGE);
+    s = actionFinished(s);
+    s = applyFetchResult(s, s.epoch, fetched("A"), () => 0, s.error !== null);
+    expect(s.screen.unreachable).toBe(false);
+    expect(s.error).toBe(ACTION_UNREACHABLE_MESSAGE);
+    expect(s.chat).toEqual(chat);
+    // A plain poll later clears it.
+    expect(applyFetchResult(s, s.epoch, fetched("A"), () => 0).error).toBeNull();
+    expect(actionFailed(s, false, "Boom").error).toBe("Boom");
   });
 
   it("applies a fetch started in the current epoch", () => {
