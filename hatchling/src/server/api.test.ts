@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { listChatMessages } from "../engine/chat.ts";
+import { addChatTurn, finishChatTurn, listChatMessages } from "../engine/chat.ts";
 import { openDb } from "../engine/db.ts";
 import { addWorkItem, claimNext, failWorkItem, finishWorkItem, getWorkItem, listWorkItems } from "../engine/store.ts";
 import { handleApi } from "./api.ts";
@@ -124,6 +124,28 @@ describe("handleApi chat", () => {
     const state = get(db, "/api/state").body as { chat: { messages: { role: string }[]; busy: boolean } };
     expect(state.chat.busy).toBe(true);
     expect(state.chat.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("starts a new conversation with an empty thread", () => {
+    const db = openDb(":memory:");
+    const { replyId } = addChatTurn(db, "hello");
+    finishChatTurn(db, replyId, { reply: "hi" });
+    expect(post(db, "/api/chat/new", {})).toEqual({ status: 200, body: {} });
+    expect(get(db, "/api/state").body).toMatchObject({ chat: { messages: [], busy: false } });
+  });
+
+  it("refuses a new conversation while a reply is pending", () => {
+    const db = openDb(":memory:");
+    addChatTurn(db, "hello");
+    expect(post(db, "/api/chat/new", {})).toEqual({
+      status: 409,
+      body: { error: "Still answering your last message." },
+    });
+    expect(listChatMessages(db)).toHaveLength(2);
+  });
+
+  it("answers 405 for GET on /api/chat/new", () => {
+    expect(get(openDb(":memory:"), "/api/chat/new").status).toBe(405);
   });
 
   it("leaves /api/ask queueing the raw text", () => {
