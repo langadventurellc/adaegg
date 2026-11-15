@@ -65,6 +65,7 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     setName: (name: string) => call<{ name: string }>("POST", "/api/name", { name }),
     ask: (text: string) => call<{ id: string; title: string }>("POST", "/api/ask", { text }),
     chat: (text: string) => call<{ messageId: number; replyId: number }>("POST", "/api/chat", { text }),
+    newConversation: () => call<Record<string, never>>("POST", "/api/chat/new", {}),
     retry: (id: string) => item(id, "retry"),
     cancel: (id: string) => item(id, "cancel"),
     continue: (id: string) =>

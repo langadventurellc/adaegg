@@ -102,6 +102,11 @@ export function canSend(text: string, busy: boolean): boolean {
   return !busy && text.trim() !== "";
 }
 
+// A new conversation needs something to leave behind and no reply pending.
+export function canStartNewConversation(messages: readonly ChatMessage[], busy: boolean): boolean {
+  return messages.length > 0 && !busy;
+}
+
 export function isSendKey(e: { key: string; shiftKey: boolean; isComposing: boolean }): boolean {
   return e.key === "Enter" && !e.shiftKey && !e.isComposing;
 }

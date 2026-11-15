@@ -9,6 +9,7 @@ import {
   applyFetchResult,
   applyUnreachable,
   canSend,
+  canStartNewConversation,
   type FetchResult,
   initialSession,
   initialState,
@@ -161,6 +162,13 @@ describe("chat helpers", () => {
   it("polls every second while busy and every three otherwise", () => {
     expect(pollDelayMs({ chat: { messages: [], busy: true } })).toBe(1000);
     expect(pollDelayMs({ chat: { messages: [], busy: false } })).toBe(3000);
+  });
+
+  it("canStartNewConversation needs messages and an idle chat", () => {
+    const m = [{ id: 1 }] as unknown as ChatMessage[];
+    expect(canStartNewConversation([], false)).toBe(false);
+    expect(canStartNewConversation(m, true)).toBe(false);
+    expect(canStartNewConversation(m, false)).toBe(true);
   });
 
   it("canSend needs text and an idle chat", () => {
