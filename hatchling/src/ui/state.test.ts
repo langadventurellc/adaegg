@@ -3,12 +3,16 @@ import type { ChatMessage } from "../engine/chat.ts";
 import { NAMES, type NameEntry } from "../names/names.ts";
 import type { RequestRow } from "../server/queue.ts";
 import {
+  ACTION_UNREACHABLE_MESSAGE,
+  actionFailed,
   actionFinished,
   anotherSuggestion,
   applyFetched,
   applyFetchResult,
   applyUnreachable,
   canSend,
+  canStartNewConversation,
+  chatAfterNewConversation,
   type FetchResult,
   initialSession,
   initialState,
@@ -106,6 +110,21 @@ describe("session sequencing", () => {
     expect(applyFetchResult(s, 0, { kind: "unreachable" }, () => 0).chat).toEqual(chat);
   });
 
+  it("keeps an unreachable action's error through the successful refresh that follows", () => {
+    let s = applyFetchResult(initialSession(), 0, fetched("A"), () => 0);
+    s = actionFailed(s, true, "ignored");
+    expect(s.screen.unreachable).toBe(true);
+    expect(s.error).toBe(ACTION_UNREACHABLE_MESSAGE);
+    s = actionFinished(s);
+    s = applyFetchResult(s, s.epoch, fetched("A"), () => 0, s.error !== null);
+    expect(s.screen.unreachable).toBe(false);
+    expect(s.error).toBe(ACTION_UNREACHABLE_MESSAGE);
+    expect(s.chat).toEqual(chat);
+    // A plain poll later clears it.
+    expect(applyFetchResult(s, s.epoch, fetched("A"), () => 0).error).toBeNull();
+    expect(actionFailed(s, false, "Boom").error).toBe("Boom");
+  });
+
   it("applies a fetch started in the current epoch", () => {
     const s = applyFetchResult(initialSession(), 0, fetched("Hopper"), () => 0);
     expect(s.screen.state?.name).toBe("Hopper");
@@ -161,6 +180,22 @@ describe("chat helpers", () => {
   it("polls every second while busy and every three otherwise", () => {
     expect(pollDelayMs({ chat: { messages: [], busy: true } })).toBe(1000);
     expect(pollDelayMs({ chat: { messages: [], busy: false } })).toBe(3000);
+  });
+
+  it("canStartNewConversation needs messages and an idle chat", () => {
+    const m = [{ id: 1 }] as unknown as ChatMessage[];
+    expect(canStartNewConversation([], false)).toBe(false);
+    expect(canStartNewConversation(m, true)).toBe(false);
+    expect(canStartNewConversation(m, false)).toBe(true);
+  });
+
+  it("chatAfterNewConversation empties the thread only when the server accepted it", () => {
+    const chat = { messages: [{ id: 1 }, { id: 2 }], busy: false };
+    expect(chatAfterNewConversation(chat, true)).toEqual({ messages: [], busy: false });
+    // A 409 (busy) or an unreachable server, even if a later refresh succeeded: nothing changes.
+    const busy = { messages: [{ id: 1 }], busy: true };
+    expect(chatAfterNewConversation(busy, false)).toBe(busy);
+    expect(chatAfterNewConversation(chat, false)).toBe(chat);
   });
 
   it("canSend needs text and an idle chat", () => {

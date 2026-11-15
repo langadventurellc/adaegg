@@ -4,12 +4,15 @@ import { ApiError, createClient, UnreachableError } from "./client.ts";
 import { PAGES, type Page } from "./pages/index.ts";
 import { pickStarters } from "./starters.ts";
 import {
+  actionFailed,
   actionFinished,
   anotherSuggestion,
   applyFetchResult,
   applyUnreachable,
   type ChatState,
   canSend,
+  canStartNewConversation,
+  chatAfterNewConversation,
   type FetchResult,
   initialSession,
   isSendKey,
@@ -93,6 +96,11 @@ function renderAskSlots(): void {
   if (starters) starters.hidden = messages.length > 0;
   const send = document.querySelector<HTMLButtonElement>("#ask-form button[type=submit]");
   if (send) send.disabled = busy;
+  const fresh = document.querySelector<HTMLButtonElement>("#new-conversation");
+  if (fresh) {
+    fresh.hidden = messages.length === 0;
+    fresh.disabled = busy;
+  }
 }
 
 // Onboarding wins over the hash; the route only matters on the ask screen.
@@ -249,16 +257,19 @@ async function submitName(form: HTMLFormElement): Promise<void> {
 }
 
 // Runs an API call for an action, records its failure, then refreshes at once.
-async function runAction(call: () => Promise<unknown>): Promise<void> {
+// Resolves true when the call itself succeeded, whatever the refresh does afterwards.
+async function runAction(call: () => Promise<unknown>): Promise<boolean> {
+  let ok = false;
   try {
     await call();
+    ok = true;
     session = { ...session, error: null };
   } catch (err) {
-    if (err instanceof UnreachableError) session = { ...session, screen: applyUnreachable(session.screen) };
-    else session = { ...session, error: describe(err) };
+    session = actionFailed(session, err instanceof UnreachableError, describe(err));
   }
   await refreshAfterAction(session.error !== null);
   renderBannerSlot();
+  return ok;
 }
 
 // Sends one chat message; resolves true when the server accepted it.
@@ -293,7 +304,28 @@ async function submitAsk(form: HTMLFormElement): Promise<void> {
 async function itemAction(button: HTMLButtonElement, action: "retry" | "cancel" | "continue"): Promise<void> {
   const id = button.dataset.id;
   if (!id) return;
-  await withDisabled(button, () => runAction(() => client[action](id)));
+  await withDisabled(button, async () => {
+    await runAction(() => client[action](id));
+  });
+}
+
+async function startNewConversation(button: HTMLButtonElement): Promise<void> {
+  if (!canStartNewConversation(session.chat.messages, session.chat.busy)) return;
+  button.disabled = true;
+  let posted = false;
+  try {
+    posted = await runAction(() => client.newConversation());
+  } finally {
+    // The button follows the chat state: disabled while a reply is pending.
+    button.disabled = session.chat.busy;
+  }
+  // On a 409 or an unreachable server the error banner shows and the thread and draft stay.
+  // Once the server accepted it, show the empty thread even if the refresh failed.
+  if (posted) {
+    session = { ...session, chat: chatAfterNewConversation(session.chat, posted) };
+    fullRender();
+    focusById("ask-text");
+  }
 }
 
 app?.addEventListener("click", (event) => {
@@ -317,6 +349,9 @@ app?.addEventListener("click", (event) => {
       if (canSend(text, session.chat.busy)) void sendChat(text);
       break;
     }
+    case "new-conversation":
+      void startNewConversation(button);
+      break;
     case "retry":
     case "cancel":
     case "continue":

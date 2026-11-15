@@ -102,6 +102,21 @@ export function canSend(text: string, busy: boolean): boolean {
   return !busy && text.trim() !== "";
 }
 
+// A new conversation needs something to leave behind and no reply pending.
+export function canStartNewConversation(messages: readonly ChatMessage[], busy: boolean): boolean {
+  return messages.length > 0 && !busy;
+}
+
+// What the screen shows once the server has accepted a new conversation, before the refresh
+// confirms it: an empty idle thread. A rejected request (409, unreachable) changes nothing,
+// whatever the refresh that follows says.
+export function chatAfterNewConversation<T extends { messages: readonly unknown[]; busy: boolean }>(
+  chat: T,
+  posted: boolean,
+): T {
+  return posted ? { ...chat, messages: [], busy: false } : chat;
+}
+
 export function isSendKey(e: { key: string; shiftKey: boolean; isComposing: boolean }): boolean {
   return e.key === "Enter" && !e.shiftKey && !e.isComposing;
 }
@@ -142,6 +157,17 @@ export function applyFetchResult(
     chat: result.state.chat,
     error: keepActionError ? session.error : null,
   };
+}
+
+export const ACTION_UNREACHABLE_MESSAGE = "Couldn't reach your hatchling, so that didn't go through. Try again.";
+
+// Record a failed action. An unreachable server also sets an explicit action error, because the
+// restarting flag is cleared by the next successful fetch and the failure must outlive it.
+export function actionFailed(session: Session, unreachable: boolean, message: string): Session {
+  if (unreachable) {
+    return { ...session, screen: applyUnreachable(session.screen), error: ACTION_UNREACHABLE_MESSAGE };
+  }
+  return { ...session, error: message };
 }
 
 export function setError(s: ScreenState, error: string | null): ScreenState {

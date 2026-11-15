@@ -403,6 +403,34 @@ describe("renderAsk", () => {
     expect(html).toContain('<div id="other-requests"></div>');
   });
 
+  it("shows New conversation beside the heading only with messages, disabled while busy", () => {
+    const empty = renderAsk({ name: "H", starters: ["Go"] });
+    expect(empty).toMatch(/<button[^>]*id="new-conversation"[^>]* hidden[ >]/);
+    expect(empty).toContain('data-action="starter"');
+    const full = renderAsk({ name: "H", starters: [], chat: { messages: [msg()], busy: false } });
+    const button = full.match(/<button[^>]*id="new-conversation"[^>]*>/)?.[0] ?? "";
+    expect(button).toContain('data-action="new-conversation"');
+    expect(button).not.toContain("hidden");
+    expect(button).not.toContain("disabled");
+    expect(full).toContain("New conversation</button>");
+    expect(full.indexOf("<h1>")).toBeLessThan(full.indexOf('id="new-conversation"'));
+    expect(full.indexOf('id="new-conversation"')).toBeLessThan(full.indexOf('id="thread"'));
+    const busy = renderAsk({ name: "H", starters: [], chat: { messages: [msg()], busy: true } });
+    expect(busy.match(/<button[^>]*id="new-conversation"[^>]*>/)?.[0]).toContain("disabled");
+  });
+
+  it("lists a request queued in an earlier conversation under Other requests", () => {
+    const old = row({ id: "oldd", title: "Old build" });
+    const html = renderAsk({
+      name: "H",
+      starters: [],
+      requests: [old],
+      chat: { messages: [msg({ id: 9 })], busy: false },
+    });
+    expect(html).toContain('<section class="other-requests">');
+    expect(html).toContain("Old build");
+  });
+
   it("lists only unreferenced rows under Other requests", () => {
     const a = row({ id: "aaaa", title: "In chat" });
     const b = row({ id: "bbbb", title: "From terminal" });

@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { titleFromText } from "../server/queue.ts";
+import { getSetting, setSetting } from "./settings.ts";
 import { addWorkItem, inTransaction } from "./store.ts";
+
+const CHAT_START_KEY = "chat_start_id";
 
 export class ChatBusyError extends Error {
   constructor() {
@@ -56,16 +59,32 @@ export function addChatTurn(db: DatabaseSync, text: string): { userId: number; r
   }
 }
 
+// The id of the first message of the current conversation; no marker means every message is current.
+export function currentStartId(db: DatabaseSync): number {
+  const value = Number(getSetting(db, CHAT_START_KEY));
+  return Number.isFinite(value) ? value : 0;
+}
+
+// Earlier messages stay in the table: the marker only moves where the current conversation starts.
+export function startNewConversation(db: DatabaseSync): void {
+  inTransaction(db, () => {
+    if (isChatBusy(db)) throw new ChatBusyError();
+    const next = db.prepare("SELECT COALESCE(MAX(id), 0) + 1 AS next FROM chat_messages").get();
+    setSetting(db, CHAT_START_KEY, String(next?.next as number));
+  });
+}
+
 export function listChatMessages(db: DatabaseSync, limit = 50): ChatMessage[] {
   const rows = db
     .prepare(
       `SELECT * FROM (
          SELECT m.id, m.role, m.text, m.status, m.request_id, m.created_at, w.title AS request_title
          FROM chat_messages m LEFT JOIN work_items w ON w.id = m.request_id
+         WHERE m.id >= ?
          ORDER BY m.id DESC LIMIT ?
        ) ORDER BY id`,
     )
-    .all(limit);
+    .all(currentStartId(db), limit);
   return rows.map((r) => ({
     id: r.id as number,
     role: r.role as ChatMessage["role"],
@@ -115,24 +134,25 @@ export function failInterruptedTurns(db: DatabaseSync): number {
 }
 
 export function chatContext(db: DatabaseSync, replyId: number): ChatContextMessage[] {
+  const startId = currentStartId(db);
   const rows = db
     .prepare(
       `SELECT * FROM (
          SELECT m.id, m.role, m.text, m.request_id, w.title AS request_title
          FROM chat_messages m LEFT JOIN work_items w ON w.id = m.request_id
-         WHERE m.status = 'done' AND m.id < ?
+         WHERE m.status = 'done' AND m.id < ? AND m.id >= ?
          ORDER BY m.id DESC LIMIT ?
        ) ORDER BY id`,
     )
-    .all(replyId, CONTEXT_FETCH);
+    .all(replyId, startId, CONTEXT_FETCH);
   // Messages after the newest queued request are the ask the chat is still working on. They stay whole (within a
   // budget) and the window reaches back to the first of them, so a late requirement in a long ask survives the
   // clarifying questions before it is queued.
   const queued = db
     .prepare(
-      "SELECT MAX(id) AS id FROM chat_messages WHERE role = 'assistant' AND status = 'done' AND request_id IS NOT NULL AND id < ?",
+      "SELECT MAX(id) AS id FROM chat_messages WHERE role = 'assistant' AND status = 'done' AND request_id IS NOT NULL AND id < ? AND id >= ?",
     )
-    .get(replyId);
+    .get(replyId, startId);
   const lastQueuedId = (queued?.id as number | null | undefined) ?? 0;
   const isOpen = (r: Record<string, unknown>) => (r.id as number) > lastQueuedId;
   const firstOpen = rows.findIndex(isOpen);

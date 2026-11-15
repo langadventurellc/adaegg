@@ -257,7 +257,10 @@ export function renderAsk(input: {
     )
     .join("");
   return [
+    '<div class="ask-header">',
     `<h1>Ask ${escapeHtml(input.name)}</h1>`,
+    `<button type="button" class="small" id="new-conversation" data-action="new-conversation"${chat.messages.length === 0 ? " hidden" : ""}${chat.busy ? " disabled" : ""}>New conversation</button>`,
+    "</div>",
     `<div id="thread">${renderThread(chat.messages, rows)}</div>`,
     '<form id="ask-form">',
     '<label for="ask-text" class="visually-hidden">What would you like it to do?</label>',
