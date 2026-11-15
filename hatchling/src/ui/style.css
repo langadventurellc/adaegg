@@ -107,6 +107,10 @@ button.small {
   font-size: 0.9rem;
 }
 
+.ask-header button.small {
+  margin-top: 0;
+}
+
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
